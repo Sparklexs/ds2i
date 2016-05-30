@@ -49,6 +49,7 @@ namespace ds2i {
 
                 switch (type) {
                 case block_type::pfor: {
+                	// note b is mandatory, possibly not the optimal
                     uint8_t b = optpfor_block::codec_type::possLogs[param];
                     optpfor_block::encode(in, sum_of_values, n, out, &b);
                     break;
@@ -121,6 +122,9 @@ namespace ds2i {
                                std::vector<time_prediction::predictor> const& predictors,
                                uint32_t access_count)
             {
+            	// basically same as profile::profile_block
+            	// however, here uses predictors
+            	// instead of measure_decoding_time
                 using namespace time_prediction;
                 std::vector<space_time_point> points;
                 thread_local std::vector<uint8_t> buf;
@@ -148,6 +152,10 @@ namespace ds2i {
                 return points;
             }
 
+            // transform the compressed block from its original type
+            // to optimal type (seperately for docid and freq)
+            // inputBlockData should be
+            // block_posting_list<>::document_enumerator::block_data
             template <typename InputBlockData>
             struct block_transformer {
                 block_transformer(InputBlockData input_block,
@@ -166,7 +174,7 @@ namespace ds2i {
                     , m_freqs_param(freqs_param)
                 {}
 
-                uint32_t index;
+                uint32_t index; // i-th block
                 uint32_t max;
                 uint32_t size;
                 uint32_t doc_gaps_universe;

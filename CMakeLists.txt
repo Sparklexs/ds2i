@@ -85,6 +85,13 @@ target_link_libraries(profile_decoding
   ${Boost_LIBRARIES}
   FastPFor_lib
   )
+  
+add_executable(bicriteria_hybrid_index bicriteria_hybrid_index.cpp)
+target_link_libraries(bicriteria_hybrid_index
+  ${Boost_LIBRARIES}
+  FastPFor_lib
+  ${STXXL_LIBRARIES}
+)
 
 enable_testing()
 add_subdirectory(test)

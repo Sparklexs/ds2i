@@ -32,6 +32,7 @@ struct lambda_point {
     struct comparator {
         bool operator()(lambda_point const& lhs, lambda_point const& rhs) const
         {
+        	// in ascending order
             return lhs.lambda < rhs.lambda;
         }
 
@@ -82,7 +83,7 @@ struct lambdas_computer : ds2i::semiasync_queue::job {
 
         block_id_type cur_block_id = m_block_id_base;
         for (auto const& input_block: blocks) {
-            static const uint32_t smoothing = 1; // Laplace smoothing
+            static const uint32_t smoothing = 1; // Laplace smoothing, in case access count is 0
             uint32_t docs_exp = smoothing, freqs_exp = smoothing;
             if (!m_counts.empty()) {
                 docs_exp += m_counts[2 * input_block.index];
@@ -91,19 +92,27 @@ struct lambdas_computer : ds2i::semiasync_queue::job {
 
             thread_local std::vector<uint32_t> values;
 
+// NOTE, here only defines an anonymous function
             auto append_lambdas = [&](std::vector<mixed_block::space_time_point>& points,
                                       block_id_type block_id) {
                 // sort by space, time
                 std::sort(points.begin(), points.end());
 
                 // smallest point is always added with lambda=0
+                // thus m_points_buf wiill never be cleared
                 m_points_buf.push_back(lambda_point { block_id, 0, points.front() });
                 for (auto const& cur: points) {
                     while (true) {
                         auto const& prev = m_points_buf.back();
                         // if this point is dominated we can skip it
                         if (cur.time >= prev.st.time) break;
+                        // the smaller lambda is, the better the encoder is
                         auto lambda = (cur.space - prev.st.space) / (prev.st.time - cur.time);
+                        // heuristic_greedy is true, then m_points_buf will never kick out lambdas
+                        // on the other hand, when it is false (as default),points that are dominated
+                        // will be popped out
+                        // namely, each time a new point is calculated, it will kick out pointed that
+                        // are dominated by it
                         if (!heuristic_greedy && lambda < prev.lambda) {
                             m_points_buf.pop_back();
                         } else {
@@ -132,6 +141,9 @@ struct lambdas_computer : ds2i::semiasync_queue::job {
     {
         // m_lambda_points.insert(m_lambda_points.end(),
         //                        m_points_buf.begin(), m_points_buf.end());
+    	// NOTE prepare() is executed in parallel, but commit()
+    	// is in serial. Thus lambdas sre sorted along blocks
+    	// rather than globally.
         std::copy(m_points_buf.begin(), m_points_buf.end(),
                   std::back_inserter(m_lambda_points));
         m_plog.done_sequence(m_e.size());
@@ -147,6 +159,11 @@ struct lambdas_computer : ds2i::semiasync_queue::job {
     lambda_vector_type& m_lambda_points;
 };
 
+/*
+ * @brief this function has two steps,
+ * 	FIRST calculate all the lambdas for each block of collection
+ * 	SECOND sort these lambdas globally
+ */
 template <typename InputCollectionType>
 void compute_lambdas(InputCollectionType const& input_coll,
                      size_t num_blocks,
@@ -192,9 +209,12 @@ void compute_lambdas(InputCollectionType const& input_coll,
         typedef lambdas_computer<InputCollectionType> job_type;
         std::shared_ptr<job_type> job;
 
+        // @freq_zero_blocks is used to count number of blocks that have never been accessed
+        // those block will have an access_count == 1
         if (l == block_counts_list) {
             freq_zero_blocks += std::accumulate(block_counts.begin(), block_counts.end(), size_t(0),
                                                 [](size_t accum, uint32_t freq) {
+            										//accum is size_t(0), freq represents elements
                                                     return accum + (freq == 0);
                                                 });
             block_counts_consumed = true;
@@ -271,19 +291,19 @@ struct list_transformer : ds2i::semiasync_queue::job {
         typedef mixed_block::block_transformer<input_block_type> output_block_type;
 
         auto blocks = m_e.get_blocks();
-        std::vector<output_block_type> output_blocks;
+        std::vector<output_block_type> blocks_to_transform;
 
         for (auto const& input_block: blocks) {
             auto docs_type = *m_block_type++;
             auto freqs_type = *m_block_type++;
             auto docs_param = *m_block_param++;
             auto freqs_param = *m_block_param++;
-            output_blocks.emplace_back(input_block,
+            blocks_to_transform.emplace_back(input_block,
                                        docs_type, freqs_type,
                                        docs_param, freqs_param);
         }
 
-        block_posting_list<mixed_block>::write_blocks(m_buf, m_e.size(), output_blocks);
+        block_posting_list<mixed_block>::write_blocks(m_buf, m_e.size(), blocks_to_transform);
     }
 
     virtual void commit()
@@ -321,16 +341,20 @@ void optimal_hybrid_index(ds2i::global_parameters const& params,
     size_t partial_blocks = 0;
     size_t space_base = 8; // space overhead independent of block compression method
     for (size_t l = 0; l < input_coll.size(); ++l) {
-        auto e = input_coll[l];
+        auto e = input_coll[l];// e should be block_posting_list
         num_blocks += 2 * e.num_blocks();
-        // list length in vbyte
+        // (list length) in vbyte, not the compressed size of the whole list
         space_base += succinct::util::ceil_div(succinct::broadword::msb(e.size()) + 1, 7);
         space_base += e.num_blocks() * 4; // max docid
         space_base += (e.num_blocks() - 1) * 4; // endpoint
         if (e.size() % mixed_block::block_size != 0) {
-            partial_blocks += 2;
+            partial_blocks += 2;// docid and freq
         }
     }
+
+    /*****************************************************
+     * step 1: compute lambdas of all blocks and sort them
+     ****************************************************/
 
     logger() << num_blocks << " overall blocks" << std::endl;
 
@@ -346,14 +370,20 @@ void optimal_hybrid_index(ds2i::global_parameters const& params,
                                stxxl::file::DIRECT | stxxl::file::RDONLY);
     lambda_vector_type lambda_points(&lpfile);
 
+    /*****************************************************
+     * step 2: compute space-time tradeoffs
+     ****************************************************/
+
     double tick = get_time_usecs();
     double user_tick = get_user_time_usecs();
 
     logger() << "Computing space-time tradeoffs" << std::endl;
+
     std::vector<uint16_t> block_spaces(num_blocks);
     std::vector<float> block_times(num_blocks);
     std::vector<mixed_block::block_type> block_types(num_blocks);
     std::vector<mixed_block::compr_param_type> block_params(num_blocks);
+
     size_t cur_space = space_base;
     double cur_time = 0;
     size_t seen_lambdas = 0;
@@ -364,6 +394,21 @@ void optimal_hybrid_index(ds2i::global_parameters const& params,
         lambdas_log.open(output_filename, std::ios::out);
     }
 
+    /*
+     * firstly, choose all the lambdas == 0, get the space-optimal solution.
+     * then if we do not exceed the budget, which means we can make the solution
+     * more time-efficient, we alter encodings of some blocks with faster
+     * but larger encodings to sacrifice space for time.
+     *
+     * this procedure will stop once we reach the budget.
+     *
+     * NOTE that during the first stage, we have already fill all the vectors
+     * with (space, time, type, param), and the second stage we replace some of
+     * them.
+     *
+     * with these vectors, we know how to compress each block accordingly in STEP 3.
+     * And we only need (type, param) to compress blocks
+     */
     for (auto const& lpid: lambda_vector_type::bufreader_type(lambda_points)) {
         assert(lpid.block_id < num_blocks);
         cur_space -= block_spaces[lpid.block_id];
@@ -419,7 +464,14 @@ void optimal_hybrid_index(ds2i::global_parameters const& params,
         ("found_time", cur_time)
         ;
 
+    /*****************************************************
+     * step 3: use builder compress posting lists in parallel
+     * then merge into the block_freq_index
+     ****************************************************/
+
+    // encoder_id, encoder_param
     typedef std::tuple<uint32_t, uint32_t> type_param_pair;
+
     std::map<type_param_pair, size_t> type_counts;
     for (size_t i = 0; i < num_blocks; ++i) {
         type_counts[type_param_pair((uint8_t)block_types[i], block_params[i])] += 1;

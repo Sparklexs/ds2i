@@ -52,7 +52,7 @@ namespace ds2i {
             void build(block_freq_index& sq)
             {
                 sq.m_params = m_params;
-                sq.m_size = m_endpoints.size() - 1;
+                sq.m_size = m_endpoints.size() - 1; // num of posting lists
                 sq.m_num_docs = m_num_docs;
                 sq.m_lists.steal(m_lists);
 
@@ -101,6 +101,8 @@ namespace ds2i {
                                                      m_params);
 
             auto begin = endpoints.move(i).second;
+            // unless i is the last posting list
+            // or it should pointing to endpoints[i+1]
             auto end = m_lists.size();
             if (i + 1 != size()) {
                 end = endpoints.move(i + 1).second;
@@ -138,6 +140,7 @@ namespace ds2i {
         size_t m_size;
         size_t m_num_docs;
         succinct::bit_vector m_endpoints;
+        // the complete list of compressed posting lists
         succinct::mapper::mappable_vector<uint8_t> m_lists;
     };
 }

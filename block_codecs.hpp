@@ -10,6 +10,9 @@
 
 namespace ds2i {
 
+	// NOTE: deocde returns pointer to the source vector (namely the compressed
+	// one), and it points the the position where values haven't been decoded.
+
     // workaround: VariableByte::decodeArray needs the buffer size, while we
     // only know the number of values. It also pads to 32 bits. We need to
     // rewrite
@@ -270,12 +273,12 @@ namespace ds2i {
                 return;
             }
 
-            size_t out_len = buf.size();
+            size_t out_len = buf.size(); // count how many bytes are left
 
             const uint32_t * src = in;
             unsigned char* dst = buf.data();
             size_t srclen = n * 4;
-            size_t dstlen = out_len;
+            size_t dstlen = out_len; // count how many bytes are left
             out_len = 0;
             while (srclen > 0 && dstlen >= 9) {
                 out_len += varint_codec.encodeBlock(src, srclen, dst, dstlen);
@@ -295,10 +298,10 @@ namespace ds2i {
                 return interpolative_block::decode(in, out, sum_of_values, n);
             }
 
-            size_t out_len = 0;
+            size_t out_len = 0; // count in number rather than byte or word
             uint8_t const* src = in;
             uint32_t* dst = out;
-            while (out_len <= (n - 8)) {
+            while (out_len <= (n - 8)) { // at least there are more than 8 integers left
                 out_len += varint_codec.decodeBlock(src, dst + out_len);
             }
 

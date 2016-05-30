@@ -17,7 +17,7 @@ namespace ds2i { namespace time_prediction {
     constexpr size_t num_features = BOOST_PP_SEQ_SIZE(DS2I_FEATURE_TYPES);
 
     enum class feature_type {
-        BOOST_PP_SEQ_ENUM(DS2I_FEATURE_TYPES), end
+        BOOST_PP_SEQ_ENUM(DS2I_FEATURE_TYPES), end // "end" is of no use and never be fetched
     };
 
     feature_type parse_feature_type(std::string const& name)

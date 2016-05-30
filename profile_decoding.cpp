@@ -43,6 +43,9 @@ namespace ds2i {
     void profile_block(std::vector<uint32_t> const& values,
                        uint32_t sum_of_values)
     {
+    	// basically same as mixed_block::compute_space_time
+    	// however, here uses measure_decoding_time
+    	// instead of predictors
         using namespace time_prediction;
         std::vector<uint8_t> buf;
         uint32_t n = values.size();
