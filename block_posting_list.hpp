@@ -107,11 +107,13 @@ struct block_posting_list {
 		document_enumerator(uint8_t const* data, uint64_t universe,
 				size_t term_id = 0) :
 				m_n(0) // just to silence warnings
-						, m_base(TightVariableByte::decode(data, &m_n, 1)), m_blocks(
-						succinct::util::ceil_div(m_n, BlockCodec::block_size)), m_block_maxs(
-						m_base), m_block_endpoints(m_block_maxs + 4 * m_blocks), m_blocks_data(
-						m_block_endpoints + 4 * (m_blocks - 1)), m_universe(
-						universe) {
+				, m_base(TightVariableByte::decode(data, &m_n, 1))
+				, m_blocks(
+						succinct::util::ceil_div(m_n, BlockCodec::block_size))
+				, m_block_maxs(m_base)
+				, m_block_endpoints(m_block_maxs + 4 * m_blocks)
+				, m_blocks_data(m_block_endpoints + 4 * (m_blocks - 1))
+				, m_universe(universe) {
 			if (Profile) {
 				// std::cout << "OPEN\t" << m_term_id << "\t" << m_blocks << "\n";
 				m_block_profile = block_profiler::open_list(term_id, m_blocks);
