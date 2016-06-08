@@ -10,8 +10,12 @@
 
 namespace ds2i {
 
-// NOTE: deocde returns pointer to the source vector (namely the compressed
+// (2016.05.25)NOTE: deocde returns pointer to the source vector (namely the compressed
 // one), and it points the the position where values haven't been decoded.
+
+// (2016.06.02) block length is extended from fixed-size (128) to variable-size, however,
+// in affection of "thread_local", vectors in encoding method are static during thread.
+// So I have to resize the vectors each time.
 
 // workaround: VariableByte::decodeArray needs the buffer size, while we
 // only know the number of values. It also pads to 32 bits. We need to
@@ -261,7 +265,7 @@ struct varint_G8IU_block {
 			uint8_t desc = *src;
 			src += 1;
 			const __m128i data = _mm_lddqu_si128(
-					reinterpret_cast<__m128i                                       const *>(src));
+					reinterpret_cast<__m128i                                        const *>(src));
 			src += 8;
 			const __m128i result = _mm_shuffle_epi8(data, vecmask[desc][0]);
 			_mm_storeu_si128(reinterpret_cast<__m128i *>(dst), result);
