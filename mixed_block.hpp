@@ -46,7 +46,7 @@ struct mixed_block {
 			}
 		} else {
 			uint8_t description = (uint8_t) type << BLOCKSIZEOFFSET
-					| ((uint8_t) n / BLOCKSIZEBASE);
+					| (uint8_t) ((n - 1) / BLOCKSIZEBASE);
 			out.push_back(description);
 		}
 

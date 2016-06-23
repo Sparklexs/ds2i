@@ -339,7 +339,8 @@ struct block_posting_list {
 		uint32_t m_cur_block_size;
 		uint32_t m_cur_docid;
 
-		uint8_t const* m_freqs_block_data;bool m_freqs_decoded;
+		uint8_t const* m_freqs_block_data;
+		bool m_freqs_decoded;
 
 		std::vector<uint32_t> m_docs_buf;
 		std::vector<uint32_t> m_freqs_buf;
@@ -726,7 +727,8 @@ struct block_posting_list<ds2i::mixed_block, Profile> {
 
 		// after decoding docid of current block, it is set
 		// pointing to start position of compressed freq
-		uint8_t const* m_freqs_block_data;bool m_freqs_decoded;
+		uint8_t const* m_freqs_block_data;
+		bool m_freqs_decoded;
 
 		// buffers storing docids and freqs of current block
 		std::vector<uint32_t> m_docs_buf;
