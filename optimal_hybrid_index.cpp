@@ -98,7 +98,7 @@ struct lambdas_computer : ds2i::semiasync_queue::job {
                 // sort by space, time
                 std::sort(points.begin(), points.end());
 
-                // smallest point is always added with lambda=0
+                // smallest-space point is always added with lambda=0
                 // thus m_points_buf wiill never be cleared
                 m_points_buf.push_back(lambda_point { block_id, 0, points.front() });
                 for (auto const& cur: points) {
@@ -148,6 +148,8 @@ struct lambdas_computer : ds2i::semiasync_queue::job {
                   std::back_inserter(m_lambda_points));
         m_plog.done_sequence(m_e.size());
     }
+
+    virtual ~lambdas_computer(){}
 
     block_id_type m_block_id_base;
     typename InputCollectionType::document_enumerator m_e;
@@ -311,6 +313,7 @@ struct list_transformer : ds2i::semiasync_queue::job {
         m_b.add_posting_list(m_buf);
         m_plog.done_sequence(m_e.size());
     }
+    virtual ~list_transformer(){}
 
     CollectionBuilder& m_b;
     typename InputCollectionType::document_enumerator m_e;
@@ -469,6 +472,8 @@ void optimal_hybrid_index(ds2i::global_parameters const& params,
      * then merge into the block_freq_index
      ****************************************************/
 
+    // first, output statistics on times of encoders used for all the blocks
+
     // encoder_id, encoder_param
     typedef std::tuple<uint32_t, uint32_t> type_param_pair;
 
@@ -491,6 +496,7 @@ void optimal_hybrid_index(ds2i::global_parameters const& params,
         ("type_counts", type_counts_vec)
         ;
 
+    // second, begin to recompress
     tick = get_time_usecs();
     user_tick = get_user_time_usecs();
 

@@ -247,14 +247,13 @@ public:
 //		return get(space, time);
 //	}
 };
+
 class solution_info {
 private:
 	double time, space;
 	std::vector<int> lp_indexs;
 public:
-	solution_info() {
-
-	}
+	solution_info(){}
 	solution_info(double _space, double _time, int size) :
 			space(_space), time(_time) {
 		lp_indexs.assign(size * 2, 0);
@@ -467,6 +466,9 @@ std::ostream& print_basis(dual_basis &basis) {
 			<< basis.get_phi() << std::endl;
 }
 
+/*
+ *
+ */
 template<typename InputCollectionType, typename CollectionBuilder>
 struct space_time_computer: ds2i::semiasync_queue::job {
 	space_time_computer(CollectionBuilder &b,
@@ -547,6 +549,9 @@ struct space_time_computer: ds2i::semiasync_queue::job {
 				<< blocks.size() << " * 2 blocks in current list." << std::endl;
 #endif
 		// space-optimal and time-optimal
+	    /*****************************************************
+	     * step 1: initialize two extreme paths as pi_l and pi_r
+	     ****************************************************/
 		solution_info sol_final;
 		dual_basis basis = initilizeSpaceTimeSolutions();
 
@@ -560,14 +565,23 @@ struct space_time_computer: ds2i::semiasync_queue::job {
 		} else {
 			// next optimize the basis to squeeze the range between
 			// UB and LB
+		    /*****************************************************
+		     * step 2: recursively intersect pi_l and pi_r to approximate the boundary
+		     ****************************************************/
 			optimal(basis);
 
 			//next swap UB and LB if needed
+		    /*****************************************************
+		     * step 3: combine UB and LB into one path
+		     ****************************************************/
 			sol_final = swap_path(basis);
 
 		}
 
 		// transform the compressed data
+	    /*****************************************************
+	     * step 4: recompress all the blocks and flush into disk
+	     ****************************************************/
 
 		typedef typename InputCollectionType::document_enumerator::block_data input_block_type;
 		typedef mixed_block::block_transformer<input_block_type> output_block_type;
@@ -589,6 +603,8 @@ struct space_time_computer: ds2i::semiasync_queue::job {
 		m_b.add_posting_list(m_buf);
 		m_plog.done_sequence(m_e.size());
 	}
+
+	virtual ~space_time_computer(){}
 
 	dual_basis initilizeSpaceTimeSolutions() {
 		solution_info sol_info_space(0, 0, m_block_doc_lambdas.size());
@@ -823,6 +839,9 @@ struct space_time_computer: ds2i::semiasync_queue::job {
 }
 ;
 
+/*
+ * compute lambdas and compress in parallel ofr each posting list
+ */
 template<typename InputCollectionType>
 void compute_solution(InputCollectionType const& input_coll,
 		ds2i::global_parameters const& params, const char* predictors_filename,
@@ -921,6 +940,7 @@ void bicriteria_hybrid_index(ds2i::global_parameters const& params,
 	boost::iostreams::mapped_file_source m(input_filename);
 	succinct::mapper::map(input_coll, m);
 
+	// do some statistics like counting blocks and space cost of auxiliary info
 	logger() << "Processing " << input_coll.size() << " posting lists"
 			<< std::endl;
 
@@ -940,11 +960,13 @@ void bicriteria_hybrid_index(ds2i::global_parameters const& params,
 		}
 	}
 	logger() << num_blocks << " overall blocks" << std::endl;
+	logger() << partial_blocks << " partial blocks"
+			<< std::endl;
 	logger() << space_base << " bytes (not including compressed blocks)"
 			<< std::endl;
 
 	/*****************************************************
-	 * step 1: compute lambdas of all blocks and sort them
+	 * call the function that build the mixed-index
 	 ****************************************************/
 
 	compute_solution(input_coll, params, predictors_filename,
