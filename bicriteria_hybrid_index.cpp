@@ -31,6 +31,7 @@
 using ds2i::logger;
 
 typedef uint32_t block_id_type; // XXX for memory reasons, but would need size_t for very large indexes
+typedef std::tuple<uint32_t, uint32_t> type_param_pair; // encoder_id, parameter
 
 enum bound_type {
 	TIME, SPACE
@@ -253,7 +254,8 @@ private:
 	double time, space;
 	std::vector<int> lp_indexs;
 public:
-	solution_info(){}
+	solution_info() {
+	}
 	solution_info(double _space, double _time, int size) :
 			space(_space), time(_time) {
 		lp_indexs.assign(size * 2, 0);
@@ -475,9 +477,10 @@ struct space_time_computer: ds2i::semiasync_queue::job {
 			typename InputCollectionType::document_enumerator e,
 			ds2i::predictors_vec_type const& predictors,
 			std::vector<uint32_t>& counts, ds2i::progress_logger& plog,
-			std::shared_ptr<bound> budget) :
+			std::shared_ptr<bound> budget,
+			std::map<type_param_pair, size_t> t_counts) :
 			m_b(b), m_e(e), m_predictors(predictors), m_plog(plog), m_budget(
-					budget) {
+					budget), m_type_counts(t_counts) {
 		m_counts.swap(counts);
 //		m_cwf = new cw_factory(budget->type() == TIME);
 	}
@@ -549,9 +552,9 @@ struct space_time_computer: ds2i::semiasync_queue::job {
 				<< blocks.size() << " * 2 blocks in current list." << std::endl;
 #endif
 		// space-optimal and time-optimal
-	    /*****************************************************
-	     * step 1: initialize two extreme paths as pi_l and pi_r
-	     ****************************************************/
+		/*****************************************************
+		 * step 1: initialize two extreme paths as pi_l and pi_r
+		 ****************************************************/
 		solution_info sol_final;
 		dual_basis basis = initilizeSpaceTimeSolutions();
 
@@ -565,23 +568,23 @@ struct space_time_computer: ds2i::semiasync_queue::job {
 		} else {
 			// next optimize the basis to squeeze the range between
 			// UB and LB
-		    /*****************************************************
-		     * step 2: recursively intersect pi_l and pi_r to approximate the boundary
-		     ****************************************************/
+			/*****************************************************
+			 * step 2: recursively intersect pi_l and pi_r to approximate the boundary
+			 ****************************************************/
 			optimal(basis);
 
 			//next swap UB and LB if needed
-		    /*****************************************************
-		     * step 3: combine UB and LB into one path
-		     ****************************************************/
+			/*****************************************************
+			 * step 3: combine UB and LB into one path
+			 ****************************************************/
 			sol_final = swap_path(basis);
 
 		}
 
 		// transform the compressed data
-	    /*****************************************************
-	     * step 4: recompress all the blocks and flush into disk
-	     ****************************************************/
+		/*****************************************************
+		 * step 4: recompress all the blocks and flush into disk
+		 ****************************************************/
 
 		typedef typename InputCollectionType::document_enumerator::block_data input_block_type;
 		typedef mixed_block::block_transformer<input_block_type> output_block_type;
@@ -593,6 +596,15 @@ struct space_time_computer: ds2i::semiasync_queue::job {
 					m_block_freq_lambdas[i][sol_final.get_index()[2 * i + 1]].st.type,
 					m_block_doc_lambdas[i][sol_final.get_index()[2 * i]].st.param,
 					m_block_freq_lambdas[i][sol_final.get_index()[2 * i + 1]].st.param);
+			temp_type_counts[type_param_pair(
+					(uint8_t) m_block_doc_lambdas[i][sol_final.get_index()[2 * i]].st.type,
+					m_block_doc_lambdas[i][sol_final.get_index()[2 * i]].st.param)] +=
+					1;
+			temp_type_counts[type_param_pair(
+					(uint8_t) m_block_doc_lambdas[i][sol_final.get_index()[2 * i
+							+ 1]].st.type,
+					m_block_doc_lambdas[i][sol_final.get_index()[2 * i + 1]].st.param)] +=
+					1;
 		}
 
 		block_posting_list<mixed_block>::write_blocks(m_buf, m_e.size(),
@@ -600,11 +612,22 @@ struct space_time_computer: ds2i::semiasync_queue::job {
 	}
 
 	virtual void commit() {
+		for (uint8_t t = 0; t < ds2i::mixed_block::block_types; ++t) {
+			for (uint8_t param = 0;
+					param
+							< ds2i::mixed_block::compr_params(
+									(ds2i::mixed_block::block_type) t);
+					++param) {
+				auto tp = type_param_pair(t, param);
+				m_type_counts[tp] += temp_type_counts[tp];
+			}
+		}
 		m_b.add_posting_list(m_buf);
 		m_plog.done_sequence(m_e.size());
 	}
 
-	virtual ~space_time_computer(){}
+	virtual ~space_time_computer() {
+	}
 
 	dual_basis initilizeSpaceTimeSolutions() {
 		solution_info sol_info_space(0, 0, m_block_doc_lambdas.size());
@@ -835,6 +858,8 @@ struct space_time_computer: ds2i::semiasync_queue::job {
 	std::map<block_id_type, std::vector<lambda_point>> m_block_freq_lambdas;
 	std::shared_ptr<bound> m_budget;
 	std::vector<uint8_t> m_buf;
+	std::map<type_param_pair, size_t> m_type_counts;
+	std::map<type_param_pair, size_t> temp_type_counts;
 //	cw_factory* m_cwf;
 }
 ;
@@ -870,6 +895,7 @@ void compute_solution(InputCollectionType const& input_coll,
 	////////////////////////////////////////////////////////////
 	typedef typename block_mixed_index::builder builder_type;
 	builder_type builder(input_coll.num_docs(), params);
+	std::map<type_param_pair, size_t> type_counts;
 	///////////////////////////////////////////////////////////
 
 	for (size_t l = 0; l < input_coll.size(); l++) {
@@ -891,14 +917,14 @@ void compute_solution(InputCollectionType const& input_coll,
 			block_counts_consumed = true;
 			job.reset(
 					new job_type(builder, e, predictors, block_counts, plog,
-							budget));
+							budget, type_counts));
 		} else {
 			posting_zero_lists += 1;
 			posting_zero_blocks += 2 * e.num_blocks();
 			std::vector<uint32_t> empty_counts;
 			job.reset(
 					new job_type(builder, e, predictors, empty_counts, plog,
-							budget));
+							budget, type_counts));
 		}
 		queue.add_job(job, 2 * e.size());
 	}
@@ -908,6 +934,18 @@ void compute_solution(InputCollectionType const& input_coll,
 
 	queue.complete();
 	plog.log();
+
+	std::vector<std::pair<type_param_pair, size_t>> type_counts_vec;
+	for (uint8_t t = 0; t < mixed_block::block_types; ++t) {
+		for (uint8_t param = 0;
+				param < mixed_block::compr_params((mixed_block::block_type) t);
+				++param) {
+			auto tp = type_param_pair(t, param);
+			type_counts_vec.push_back(std::make_pair(tp, type_counts[tp]));
+		}
+	}
+
+	stats_line()("type_counts", type_counts_vec);
 
 	///write out the compressed lists into coll
 	block_mixed_index coll;
@@ -960,8 +998,7 @@ void bicriteria_hybrid_index(ds2i::global_parameters const& params,
 		}
 	}
 	logger() << num_blocks << " overall blocks" << std::endl;
-	logger() << partial_blocks << " partial blocks"
-			<< std::endl;
+	logger() << partial_blocks << " partial blocks" << std::endl;
 	logger() << space_base << " bytes (not including compressed blocks)"
 			<< std::endl;
 
