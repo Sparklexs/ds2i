@@ -27,6 +27,7 @@
 #include "util.hpp"
 #include "verify_collection.hpp"
 #include "index_build_utils.hpp"
+//#define NDEBUG
 
 using ds2i::logger;
 
@@ -251,7 +252,7 @@ public:
 
 class solution_info {
 private:
-	double time, space;
+	double space, time;
 	std::vector<int> lp_indexs;
 public:
 	solution_info() {
@@ -341,9 +342,9 @@ public:
 class dual_basis {
 private:
 	double W;
-	cw_factory cwf;
 	solution_info s_pos; // positive
 	solution_info s_neg; // negative
+	cw_factory cwf;
 	double mu;
 	double phi;
 
@@ -387,19 +388,19 @@ public:
 		if (max_weight <= W) {
 #ifndef NDEBUG
 			logger()
-					<< "Early return! time optimal solution does not exceed space budget."
+					<< "Early return! cost optimal solution does not exceed weight budget."
 					<< std::endl;
 #endif
-			if (_left.feasible())
-				s_pos = s_neg = right;
-			else
+			if (_left.get_weight() == 0)
 				s_pos = s_neg = left;
+			else
+				s_pos = s_neg = right;
 			return;
 
 		} else if (W == min_weight) {
 #ifndef NDEBUG
 			logger()
-					<< "Early return! space optimal solution just equals space budget."
+					<< "Early return! weight optimal solution just equals weight budget."
 					<< std::endl;
 #endif
 			if (_left.feasible())
@@ -478,10 +479,12 @@ struct space_time_computer: ds2i::semiasync_queue::job {
 			ds2i::predictors_vec_type const& predictors,
 			std::vector<uint32_t>& counts, ds2i::progress_logger& plog,
 			std::shared_ptr<bound> budget,
-			std::map<type_param_pair, size_t> t_counts) :
+			std::map<type_param_pair, size_t>& t_counts, bool write_to_file,
+			double& t_space, double& t_time) :
 			m_b(b), m_e(e), m_predictors(predictors), m_plog(plog), m_budget(
-					budget), m_type_counts(t_counts) {
-		m_counts.swap(counts);
+					budget), m_real_compress(write_to_file), m_type_counts(
+					t_counts), m_total_space(t_space), m_total_time(t_time) {
+		m_block_access_counts.swap(counts);
 //		m_cwf = new cw_factory(budget->type() == TIME);
 	}
 
@@ -490,16 +493,18 @@ struct space_time_computer: ds2i::semiasync_queue::job {
 		using namespace time_prediction;
 
 		auto blocks = m_e.get_blocks();
-		assert(m_counts.empty() || m_counts.size() == 2 * blocks.size());
+		assert(
+				m_block_access_counts.empty()
+						|| m_block_access_counts.size() == 2 * blocks.size());
 
 		bool heuristic_greedy = configuration::get().heuristic_greedy;
 
 		for (auto const& input_block : blocks) {
 			static const uint32_t smoothing = 1;
 			uint32_t docs_exp = smoothing, freqs_exp = smoothing;
-			if (!m_counts.empty()) {
-				docs_exp += m_counts[2 * input_block.index];
-				freqs_exp += m_counts[2 * input_block.index + 1];
+			if (!m_block_access_counts.empty()) {
+				docs_exp += m_block_access_counts[2 * input_block.index];
+				freqs_exp += m_block_access_counts[2 * input_block.index + 1];
 			}
 			thread_local std::vector<uint32_t> values;
 
@@ -545,7 +550,7 @@ struct space_time_computer: ds2i::semiasync_queue::job {
 					uint32_t(-1), m_predictors, freqs_exp);
 			append_lambdas(freqs_sts, input_block.index, m_block_freq_lambdas);
 		}
-		succinct::util::dispose(m_counts);
+		succinct::util::dispose(m_block_access_counts);
 
 #ifndef NDEBUG
 		logger() << "now we have calculated all the lambdas for "
@@ -555,7 +560,7 @@ struct space_time_computer: ds2i::semiasync_queue::job {
 		/*****************************************************
 		 * step 1: initialize two extreme paths as pi_l and pi_r
 		 ****************************************************/
-		solution_info sol_final;
+
 		dual_basis basis = initilizeSpaceTimeSolutions();
 
 #ifndef NDEBUG
@@ -564,7 +569,7 @@ struct space_time_computer: ds2i::semiasync_queue::job {
 
 		if (basis.get_mu() < 0) {
 			// early return found! we will skip following steps and compress immediately.
-			std::tie(sol_final, sol_final) = basis.get_basis();
+			std::tie(m_sol_final, m_sol_final) = basis.get_basis();
 		} else {
 			// next optimize the basis to squeeze the range between
 			// UB and LB
@@ -577,7 +582,7 @@ struct space_time_computer: ds2i::semiasync_queue::job {
 			/*****************************************************
 			 * step 3: combine UB and LB into one path
 			 ****************************************************/
-			sol_final = swap_path(basis);
+			m_sol_final = swap_path(basis);
 
 		}
 
@@ -586,44 +591,48 @@ struct space_time_computer: ds2i::semiasync_queue::job {
 		 * step 4: recompress all the blocks and flush into disk
 		 ****************************************************/
 
-		typedef typename InputCollectionType::document_enumerator::block_data input_block_type;
-		typedef mixed_block::block_transformer<input_block_type> output_block_type;
+		if (m_real_compress) {
+			typedef typename InputCollectionType::document_enumerator::block_data input_block_type;
+			typedef mixed_block::block_transformer<input_block_type> output_block_type;
 
-		std::vector<output_block_type> blocks_to_transform;
-		for (int i = 0; i < blocks.size(); i++) {
-			blocks_to_transform.emplace_back(blocks[i],
-					m_block_doc_lambdas[i][sol_final.get_index()[2 * i]].st.type,
-					m_block_freq_lambdas[i][sol_final.get_index()[2 * i + 1]].st.type,
-					m_block_doc_lambdas[i][sol_final.get_index()[2 * i]].st.param,
-					m_block_freq_lambdas[i][sol_final.get_index()[2 * i + 1]].st.param);
-			temp_type_counts[type_param_pair(
-					(uint8_t) m_block_doc_lambdas[i][sol_final.get_index()[2 * i]].st.type,
-					m_block_doc_lambdas[i][sol_final.get_index()[2 * i]].st.param)] +=
-					1;
-			temp_type_counts[type_param_pair(
-					(uint8_t) m_block_doc_lambdas[i][sol_final.get_index()[2 * i
-							+ 1]].st.type,
-					m_block_doc_lambdas[i][sol_final.get_index()[2 * i + 1]].st.param)] +=
-					1;
+			std::vector<output_block_type> blocks_to_transform;
+			for (int i = 0; i < blocks.size(); i++) {
+				blocks_to_transform.emplace_back(blocks[i],
+						m_block_doc_lambdas[i][m_sol_final.get_index()[2 * i]].st.type,
+						m_block_freq_lambdas[i][m_sol_final.get_index()[2 * i
+								+ 1]].st.type,
+						m_block_doc_lambdas[i][m_sol_final.get_index()[2 * i]].st.param,
+						m_block_freq_lambdas[i][m_sol_final.get_index()[2 * i
+								+ 1]].st.param);
+			}
+
+			block_posting_list<mixed_block>::write_blocks(m_buf, m_e.size(),
+					blocks_to_transform);
 		}
 
-		block_posting_list<mixed_block>::write_blocks(m_buf, m_e.size(),
-				blocks_to_transform);
 	}
 
 	virtual void commit() {
-		for (uint8_t t = 0; t < ds2i::mixed_block::block_types; ++t) {
-			for (uint8_t param = 0;
-					param
-							< ds2i::mixed_block::compr_params(
-									(ds2i::mixed_block::block_type) t);
-					++param) {
-				auto tp = type_param_pair(t, param);
-				m_type_counts[tp] += temp_type_counts[tp];
+		if (m_real_compress) {
+			m_b.add_posting_list(m_buf);
+			m_plog.done_sequence(m_e.size());
+		} else {
+			for (int i = 0; i < m_sol_final.get_index().size() / 2; i++) {
+				m_type_counts[type_param_pair(
+						(uint8_t) m_block_doc_lambdas[i][m_sol_final.get_index()[2
+								* i]].st.type,
+						m_block_doc_lambdas[i][m_sol_final.get_index()[2 * i]].st.param)] +=
+						1;
+				m_type_counts[type_param_pair(
+						(uint8_t) m_block_doc_lambdas[i][m_sol_final.get_index()[2
+								* i + 1]].st.type,
+						m_block_doc_lambdas[i][m_sol_final.get_index()[2 * i + 1]].st.param)] +=
+						1;
 			}
+			m_total_space += m_sol_final.get_space();
+			m_total_time += m_sol_final.get_time();
+			m_plog.done_sequence(m_e.size());
 		}
-		m_b.add_posting_list(m_buf);
-		m_plog.done_sequence(m_e.size());
 	}
 
 	virtual ~space_time_computer() {
@@ -852,14 +861,17 @@ struct space_time_computer: ds2i::semiasync_queue::job {
 	CollectionBuilder& m_b;
 	typename InputCollectionType::document_enumerator m_e;
 	ds2i::predictors_vec_type const& m_predictors;
-	std::vector<uint32_t> m_counts;
+	std::vector<uint32_t> m_block_access_counts;
 	ds2i::progress_logger& m_plog;
 	std::map<block_id_type, std::vector<lambda_point>> m_block_doc_lambdas;
 	std::map<block_id_type, std::vector<lambda_point>> m_block_freq_lambdas;
 	std::shared_ptr<bound> m_budget;
-	std::vector<uint8_t> m_buf;
-	std::map<type_param_pair, size_t> m_type_counts;
-	std::map<type_param_pair, size_t> temp_type_counts;
+	std::vector<uint8_t> m_buf;bool m_real_compress;
+	solution_info m_sol_final;
+
+	std::map<type_param_pair, size_t>& m_type_counts;
+	double& m_total_space;
+	double& m_total_time;
 //	cw_factory* m_cwf;
 }
 ;
@@ -887,15 +899,19 @@ void compute_solution(InputCollectionType const& input_coll,
 	uint32_t block_counts_list; // termID of current list
 	std::vector<uint32_t> block_counts; // doc&freq block counts
 	bool block_counts_consumed = true;
+	bool write_to_file = false;
 	size_t posting_zero_lists = 0;
 	size_t posting_zero_blocks = 0;
-
 	semiasync_queue queue(1 << 24);
+
+	if (output_filename)
+		write_to_file = true;
 
 	////////////////////////////////////////////////////////////
 	typedef typename block_mixed_index::builder builder_type;
 	builder_type builder(input_coll.num_docs(), params);
 	std::map<type_param_pair, size_t> type_counts;
+	double total_time = 0, total_space = 0;
 	///////////////////////////////////////////////////////////
 
 	for (size_t l = 0; l < input_coll.size(); l++) {
@@ -917,14 +933,16 @@ void compute_solution(InputCollectionType const& input_coll,
 			block_counts_consumed = true;
 			job.reset(
 					new job_type(builder, e, predictors, block_counts, plog,
-							budget, type_counts));
+							budget, type_counts, write_to_file, total_space,
+							total_time));
 		} else {
 			posting_zero_lists += 1;
 			posting_zero_blocks += 2 * e.num_blocks();
 			std::vector<uint32_t> empty_counts;
 			job.reset(
 					new job_type(builder, e, predictors, empty_counts, plog,
-							budget, type_counts));
+							budget, type_counts, write_to_file, total_space,
+							total_time));
 		}
 		queue.add_job(job, 2 * e.size());
 	}
@@ -935,35 +953,37 @@ void compute_solution(InputCollectionType const& input_coll,
 	queue.complete();
 	plog.log();
 
-	std::vector<std::pair<type_param_pair, size_t>> type_counts_vec;
-	for (uint8_t t = 0; t < mixed_block::block_types; ++t) {
-		for (uint8_t param = 0;
-				param < mixed_block::compr_params((mixed_block::block_type) t);
-				++param) {
-			auto tp = type_param_pair(t, param);
-			type_counts_vec.push_back(std::make_pair(tp, type_counts[tp]));
-		}
-	}
-
-	stats_line()("type_counts", type_counts_vec);
-
-	///write out the compressed lists into coll
-	block_mixed_index coll;
-	builder.build(coll);
-
-	logger() << "computation finished!" << std::endl;
 	double elapsed_secs = (get_time_usecs() - tick) / 1000000;
 	double user_elapsed_secs = (get_user_time_usecs() - user_tick) / 1000000;
+
+	logger() << "computation finished!" << std::endl;
 
 	stats_line()("worker_threads", configuration::get().worker_threads)(
 			"computation_time", elapsed_secs)("computation_user_time",
 			user_elapsed_secs)("is_heuristic",
 			configuration::get().heuristic_greedy);
 
-	dump_stats(coll, "block_mixed", plog.postings);
+	if (write_to_file) {
+		///write out the compressed lists into coll
+		block_mixed_index coll;
+		builder.build(coll);
 
-	if (output_filename) {
+		dump_stats(coll, "block_mixed", plog.postings);
+
 		succinct::mapper::freeze(coll, output_filename);
+	} else {
+		std::vector<std::pair<type_param_pair, size_t>> type_counts_vec;
+		for (uint8_t t = 0; t < mixed_block::block_types; ++t) {
+			for (uint8_t param = 0;
+					param
+							< mixed_block::compr_params(
+									(mixed_block::block_type) t); ++param) {
+				auto tp = type_param_pair(t, param);
+				type_counts_vec.push_back(std::make_pair(tp, type_counts[tp]));
+			}
+		}
+		stats_line()("type_counts", type_counts_vec)("total space", total_space)(
+				"total time", total_time);
 	}
 }
 
