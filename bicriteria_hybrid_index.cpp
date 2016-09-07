@@ -164,23 +164,23 @@ std::shared_ptr<bound> add_bound(const char* param) {
 	ss >> value;
 	std::shared_ptr<bound> ptr;
 	switch (kind) {
-	case 'm':
+	case 'm': // initial char of 'milliseconds'
 		ptr = std::make_shared<fixed_bound>(TIME,
 				value * std::nano::den / std::milli::den);
 		break;
-	case 's':
+	case 's': // initial char of 'seconds'
 		ptr = std::make_shared<fixed_bound>(TIME, value * std::nano::den);
 		break;
-	case 'K':
+	case 'K': // initial char of 'KB'
 		ptr = std::make_shared<fixed_bound>(SPACE, 8 * value * kilo_num);
 		break;
-	case 'M':
+	case 'M': // initial char of 'MB'
 		ptr = std::make_shared<fixed_bound>(SPACE, 8 * value * mega_num);
 		break;
-	case 'S':
+	case 'S': // relative bound of S(pace)
 		ptr = std::make_shared<relative_bound>(SPACE, value);
 		break;
-	case 'T':
+	case 'T': // relative bound of T(ime)
 		ptr = std::make_shared<relative_bound>(TIME, value);
 		break;
 	default:
@@ -253,10 +253,12 @@ public:
 class solution_info {
 private:
 	double space, time;
+	// index of encoders chosen for current block
 	std::vector<int> lp_indexs;
 public:
 	solution_info() {
 	}
+
 	solution_info(double _space, double _time, int size) :
 			space(_space), time(_time) {
 		lp_indexs.assign(size * 2, 0);
@@ -276,9 +278,11 @@ public:
 		time = si.get_time();
 		lp_indexs = si.get_index();
 	}
+
 	std::vector<int> &get_index() {
 		return lp_indexs;
 	}
+
 	double &get_space() {
 		return space;
 	}
@@ -286,6 +290,7 @@ public:
 	double &get_time() {
 		return time;
 	}
+
 	solution_info& operator =(solution_info si) {
 		time = si.get_time();
 		space = si.get_space();
@@ -877,7 +882,7 @@ struct space_time_computer: ds2i::semiasync_queue::job {
 ;
 
 /*
- * compute lambdas and compress in parallel ofr each posting list
+ * compute lambdas and compress in parallel for each posting list
  */
 template<typename InputCollectionType>
 void compute_solution(InputCollectionType const& input_coll,
