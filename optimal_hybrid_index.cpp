@@ -92,14 +92,14 @@ struct lambdas_computer : ds2i::semiasync_queue::job {
 
             thread_local std::vector<uint32_t> values;
 
-// NOTE, here only defines an anonymous function
+            // NOTE, here only defines an anonymous function
             auto append_lambdas = [&](std::vector<mixed_block::space_time_point>& points,
                                       block_id_type block_id) {
                 // sort by space, time
                 std::sort(points.begin(), points.end());
 
                 // smallest-space point is always added with lambda=0
-                // thus m_points_buf wiill never be cleared
+                // thus m_points_buf will never be cleared
                 m_points_buf.push_back(lambda_point { block_id, 0, points.front() });
                 for (auto const& cur: points) {
                     while (true) {
@@ -156,7 +156,7 @@ struct lambdas_computer : ds2i::semiasync_queue::job {
     ds2i::predictors_vec_type const& m_predictors;
     std::vector<uint32_t> m_counts;
     ds2i::progress_logger& m_plog;
-    double m_lambda;
+//    double m_lambda;
     std::vector<lambda_point> m_points_buf;
     lambda_vector_type& m_lambda_points;
 };
@@ -186,7 +186,7 @@ void compute_lambdas(InputCollectionType const& input_coll,
     double tick = get_time_usecs();
     double user_tick = get_user_time_usecs();
 
-    std::string line;
+    //    std::string line;
     uint32_t block_counts_list;
     std::vector<uint32_t> block_counts;
     bool block_counts_consumed = true;
@@ -257,6 +257,9 @@ void compute_lambdas(InputCollectionType const& input_coll,
     tick = get_time_usecs();
     user_tick = get_user_time_usecs();
     static const size_t sort_memory = size_t(16) * 1024 * 1024 * 1024; // XXX
+    /*
+     * HERE SORTS ALL THE LAMBDAS OF THE INDEX
+     */
     stxxl::sort(lambda_points.begin(), lambda_points.end(),
                 lambda_point::comparator(),
                 sort_memory);
@@ -322,7 +325,6 @@ struct list_transformer : ds2i::semiasync_queue::job {
     ds2i::progress_logger& m_plog;
     std::vector<uint8_t> m_buf;
 };
-
 
 template <typename InputCollectionType>
 void optimal_hybrid_index(ds2i::global_parameters const& params,
@@ -472,7 +474,7 @@ void optimal_hybrid_index(ds2i::global_parameters const& params,
      * then merge into the block_freq_index
      ****************************************************/
 
-    // first, output statistics on times of encoders used for all the blocks
+    // FIRST, output statistics on times of encoders used for all the blocks
 
     // encoder_id, encoder_param
     typedef std::tuple<uint32_t, uint32_t> type_param_pair;
@@ -496,7 +498,7 @@ void optimal_hybrid_index(ds2i::global_parameters const& params,
         ("type_counts", type_counts_vec)
         ;
 
-    // second, begin to recompress
+    // SECOND, begin to recompress at the level of LIST-WISE
     tick = get_time_usecs();
     user_tick = get_user_time_usecs();
 
@@ -544,7 +546,6 @@ void optimal_hybrid_index(ds2i::global_parameters const& params,
         succinct::mapper::freeze(coll, output_filename);
     }
 }
-
 
 int main(int argc, const char** argv) {
 

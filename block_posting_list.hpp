@@ -66,8 +66,9 @@ struct block_posting_list {
 		}
 	}
 
-	// different from the above "write", here the input_blocks is already
-	// compressed, we just append each block inside input_blocks to out.
+	// different from the above "write", here the input_blocks are already
+	// compressed, we first decode then re-encode append each block inside
+	// @input_blocks to @out.
 
 	// @param BlockDataRange should be block_data
 	// ??? this method is used for mixed_block, append means decode first
