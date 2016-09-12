@@ -252,14 +252,15 @@ public:
 
 class solution_info {
 private:
-	double space, time;
+	size_t space;
+	double time;
 	// index of encoders chosen for current block
 	std::vector<int> lp_indexs;
 public:
 	solution_info() {
 	}
 
-	solution_info(double _space, double _time, int size) :
+	solution_info(size_t _space, double _time, block_id_type size) :
 			space(_space), time(_time) {
 		lp_indexs.assign(size * 2, 0);
 	}
@@ -283,7 +284,7 @@ public:
 		return lp_indexs;
 	}
 
-	double &get_space() {
+	size_t &get_space() {
 		return space;
 	}
 
@@ -485,7 +486,7 @@ struct space_time_computer: ds2i::semiasync_queue::job {
 			std::vector<uint32_t>& counts, ds2i::progress_logger& plog,
 			std::shared_ptr<bound> budget,
 			std::map<type_param_pair, size_t>& t_counts, bool write_to_file,
-			double& t_space, double& t_time) :
+			size_t& t_space, double& t_time) :
 			m_b(b), m_e(e), m_predictors(predictors), m_plog(plog), m_budget(
 					budget), m_real_compress(write_to_file), m_type_counts(
 					t_counts), m_total_space(t_space), m_total_time(t_time) {
@@ -566,7 +567,7 @@ struct space_time_computer: ds2i::semiasync_queue::job {
 		 * step 1: initialize two extreme paths as pi_l and pi_r
 		 ****************************************************/
 
-		dual_basis basis = initilizeSpaceTimeSolutions();
+		dual_basis basis = initializeSpaceTimeSolutions();
 
 #ifndef NDEBUG
 		print_basis(basis);
@@ -643,9 +644,11 @@ struct space_time_computer: ds2i::semiasync_queue::job {
 	virtual ~space_time_computer() {
 	}
 
-	dual_basis initilizeSpaceTimeSolutions() {
-		solution_info sol_info_space(0, 0, m_block_doc_lambdas.size());
-		solution_info sol_info_time(0, 0, m_block_doc_lambdas.size());
+	dual_basis initializeSpaceTimeSolutions() {
+		solution_info sol_info_space(m_total_space, m_total_time,
+				m_block_doc_lambdas.size());
+		solution_info sol_info_time(m_total_space, m_total_time,
+				m_block_doc_lambdas.size());
 		for (int i = 0; i < m_block_doc_lambdas.size(); i++) {
 			// overall space
 			sol_info_space.get_space() +=
@@ -668,17 +671,14 @@ struct space_time_computer: ds2i::semiasync_queue::job {
 			//			sol_info_time.get_space() +=
 			//					m_block_freq_lambdas[i].end()->st.space;
 
+			sol_info_time.get_space() += m_block_doc_lambdas[i].back().st.space;
 			sol_info_time.get_space() +=
-					m_block_doc_lambdas[i][m_block_doc_lambdas[i].size() - 1].st.space;
-			sol_info_time.get_space() +=
-					m_block_freq_lambdas[i][m_block_freq_lambdas[i].size() - 1].st.space;
+					m_block_freq_lambdas[i].back().st.space;
 			// overall time
 			//			sol_info_time.get_time() += m_block_doc_lambdas[i].end()->st.time;
 			//			sol_info_time.get_time() += m_block_freq_lambdas[i].end()->st.time;
-			sol_info_time.get_time() +=
-					m_block_doc_lambdas[i][m_block_doc_lambdas[i].size() - 1].st.time;
-			sol_info_time.get_time() +=
-					m_block_freq_lambdas[i][m_block_freq_lambdas[i].size() - 1].st.time;
+			sol_info_time.get_time() += m_block_doc_lambdas[i].back().st.time;
+			sol_info_time.get_time() += m_block_freq_lambdas[i].back().st.time;
 			//indexes are end of each vector
 			sol_info_time.get_index()[i * 2] = m_block_doc_lambdas[i].size()
 					- 1;
@@ -708,7 +708,8 @@ struct space_time_computer: ds2i::semiasync_queue::job {
 
 		do {
 			phi_pre = basis.get_phi();
-			solution_info sol_si(0, 0, m_block_freq_lambdas.size());
+			solution_info sol_si(m_total_space, m_total_time,
+					m_block_freq_lambdas.size());
 			double threshold = 0;
 			switch (m_budget->type()) {
 			case TIME: //time is weight
@@ -762,9 +763,9 @@ struct space_time_computer: ds2i::semiasync_queue::job {
 		std::tie(s_1, s_2) = basis.get_basis();
 		double W = basis.get_W();
 
-		// early return since the negative path satisfy budget
-		if (basis.get_cwf().get(s_2.get_space(), s_2.get_time()).weight <= W)
-			return s_2;
+		// early return since the positive path satisfy budget
+		if (basis.get_cwf().get(s_1.get_space(), s_1.get_time()).weight <= W)
+			return s_1;
 
 		std::array<std::vector<int>::iterator, 2> sol_its = {
 				s_1.get_index().begin(), s_2.get_index().begin() };
@@ -777,15 +778,15 @@ struct space_time_computer: ds2i::semiasync_queue::job {
 		swap_sol = swap_point = std::numeric_limits<unsigned int>::max();
 		double best_cost = std::numeric_limits<double>::max();
 
-		std::array<double, 2> head_spaces { { 0, 0 } }, head_times { { 0, 0 } };
-		std::array<double, 2>
-				tail_spaces { { s_1.get_space(), s_2.get_space() } },
+		std::array<size_t, 2> head_spaces { { m_total_space, m_total_space } },
+				tail_spaces { { s_1.get_space(), s_2.get_space() } };
+		std::array<double, 2> head_times { { m_total_time, m_total_time } },
 				tail_times { { s_1.get_time(), s_2.get_time() } };
 
+		size_t count = 0;
 		while (sol_its[0] != s_1.get_index().end()
 				&& sol_its[1] != s_2.get_index().end()) {
 
-			static unsigned int count = 0;
 			// 1. skip over blocks using same encoding parameters
 
 			// after this while-loop, head contains blocks[0, the first not equal)
@@ -834,8 +835,8 @@ struct space_time_computer: ds2i::semiasync_queue::job {
 			// 2. try to swap blocks to get better tradeoffs
 			// try different combinations of (head,tail)
 			for (int j = 0; j < 2; j++) {
-				auto s_space = head_spaces[j] + tail_spaces[j];
-				auto s_time = head_times[j] + tail_times[j];
+				auto s_space = head_spaces[j] + tail_spaces[(j + 1) % 2];
+				auto s_time = head_times[j] + tail_times[(j + 1) % 2];
 				cost_weight cw = basis.get_cwf().get(s_space, s_time);
 				if (cw.weight <= W && cw.cost < best_cost) {
 					best_cost = cw.cost;
@@ -844,11 +845,12 @@ struct space_time_computer: ds2i::semiasync_queue::job {
 				}
 			}
 		}
+#ifndef NDEBUG
 		std::cout << "swap starts from " << swap_sol << ", at position "
-				<< swap_point << ", with cost " << best_cost << std::endl;
-
+		<< swap_point << ", with cost " << best_cost << std::endl;
+#endif
 		if (best_cost < std::numeric_limits<double>::max()) {
-			if (swap_point == 0) {
+			if (swap_sol == 0) {
 				std::swap_ranges(s_1.get_index().begin() + swap_point,
 						s_1.get_index().end(),
 						s_2.get_index().begin() + swap_point);
@@ -875,7 +877,7 @@ struct space_time_computer: ds2i::semiasync_queue::job {
 	solution_info m_sol_final;
 
 	std::map<type_param_pair, size_t>& m_type_counts;
-	double& m_total_space;
+	size_t& m_total_space;
 	double& m_total_time;
 //	cw_factory* m_cwf;
 }
@@ -886,9 +888,9 @@ struct space_time_computer: ds2i::semiasync_queue::job {
  */
 template<typename InputCollectionType>
 void compute_solution(InputCollectionType const& input_coll,
-		ds2i::global_parameters const& params, const char* predictors_filename,
-		const char* block_stats_filename, const char*output_filename,
-		std::shared_ptr<bound> budget) {
+		ds2i::global_parameters const& params, size_t space_base,
+		const char* predictors_filename, const char* block_stats_filename,
+		const char*output_filename, std::shared_ptr<bound> budget) {
 	using namespace ds2i;
 	using namespace time_prediction;
 
@@ -916,7 +918,8 @@ void compute_solution(InputCollectionType const& input_coll,
 	typedef typename block_mixed_index::builder builder_type;
 	builder_type builder(input_coll.num_docs(), params);
 	std::map<type_param_pair, size_t> type_counts;
-	double total_time = 0, total_space = 0;
+	double total_time = 0;
+	size_t total_space = space_base;
 	///////////////////////////////////////////////////////////
 
 	for (size_t l = 0; l < input_coll.size(); l++) {
@@ -930,7 +933,7 @@ void compute_solution(InputCollectionType const& input_coll,
 		std::shared_ptr<job_type> job;
 
 		if (l == block_counts_list) {
-			posting_zero_lists += std::accumulate(block_counts.begin(),
+			posting_zero_blocks += std::accumulate(block_counts.begin(),
 					block_counts.end(), size_t(0),
 					[](size_t accum, uint32_t freq) {
 						return accum+(freq==0);
@@ -958,22 +961,12 @@ void compute_solution(InputCollectionType const& input_coll,
 	queue.complete();
 	plog.log();
 
-	double elapsed_secs = (get_time_usecs() - tick) / 1000000;
-	double user_elapsed_secs = (get_user_time_usecs() - user_tick) / 1000000;
-
-	logger() << "computation finished!" << std::endl;
-
-	stats_line()("worker_threads", configuration::get().worker_threads)(
-			"computation_time", elapsed_secs)("computation_user_time",
-			user_elapsed_secs)("is_heuristic",
-			configuration::get().heuristic_greedy);
-
 	if (write_to_file) {
 		///write out the compressed lists into coll
 		block_mixed_index coll;
 		builder.build(coll);
 
-		dump_stats(coll, "block_mixed", plog.postings);
+//		dump_stats(coll, "block_mixed", plog.postings);
 
 		succinct::mapper::freeze(coll, output_filename);
 	} else {
@@ -990,6 +983,16 @@ void compute_solution(InputCollectionType const& input_coll,
 		stats_line()("type_counts", type_counts_vec)("total space", total_space)(
 				"total time", total_time);
 	}
+
+	double elapsed_secs = (get_time_usecs() - tick) / 1000000;
+	double user_elapsed_secs = (get_user_time_usecs() - user_tick) / 1000000;
+
+	logger() << "computation finished!" << std::endl;
+
+	stats_line()("worker_threads", configuration::get().worker_threads)(
+			"computation_time", elapsed_secs)("computation_user_time",
+			user_elapsed_secs)("is_heuristic",
+			configuration::get().heuristic_greedy);
 }
 
 template<typename InputCollectionType>
@@ -1031,7 +1034,7 @@ void bicriteria_hybrid_index(ds2i::global_parameters const& params,
 	 * call the function that build the mixed-index
 	 ****************************************************/
 
-	compute_solution(input_coll, params, predictors_filename,
+	compute_solution(input_coll, params, space_base, predictors_filename,
 			block_stats_filename, output_filename, budget);
 
 }
