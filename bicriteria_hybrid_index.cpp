@@ -37,6 +37,7 @@ dual_basis initializeSpaceTimeSolutions(
 	solution_info sol_info_time(space_base, time_base,
 			block_doc_freq_lambdas.size());
 
+	int i = 0;
 	for (block_lambdas_type::iterator it = block_doc_freq_lambdas.begin();
 			it != block_doc_freq_lambdas.end(); it++) {
 		// here only needs to traverse all the block_lambdas without
@@ -49,8 +50,7 @@ dual_basis initializeSpaceTimeSolutions(
 		sol_info_space.get_time() += it->second.front().st.time;
 		sol_info_time.get_time() += it->second.back().st.time;
 		// indexes are naturally 0s and size()-1
-		sol_info_time.get_index().push_back(block_doc_freq_lambdas.size() - 1);
-
+		sol_info_time.get_index()[i++] = it->second.size() - 1;
 	}
 #ifndef NDEBUG
 	logger() << "space-optimal solution: S = " << sol_info_space.get_space()
@@ -121,9 +121,9 @@ solution_info swapPath(dual_basis & basis,
 	std::tie(s_1, s_2) = basis.get_basis();
 	double W = basis.get_W();
 
-	// early return since the negative path satisfy budget
-	if (basis.get_cwf().get(s_2.get_space(), s_2.get_time()).weight <= W)
-		return s_2;
+	// early return since the positive path satisfy budget
+	if (basis.get_cwf().get(s_1.get_space(), s_1.get_time()).weight <= W)
+		return s_1;
 
 	std::array<std::vector<int>::iterator, 2> sol_its = {
 			s_1.get_index().begin(), s_2.get_index().begin() };
@@ -189,14 +189,14 @@ solution_info swapPath(dual_basis & basis,
 
 		// 2. try to swap blocks to get better tradeoffs
 		// try different combinations of (head,tail)
-		for (bool j = 0; j < 2; j++) {
-			auto s_space = head_spaces[j] + tail_spaces[!j];
-			auto s_time = head_times[j] + tail_times[!j];
+		for (int j = 0; j < 2; j++) {
+			auto s_space = head_spaces[j] + tail_spaces[(j + 1) % 2];
+			auto s_time = head_times[j] + tail_times[(j + 1) % 2];
 			cost_weight cw = basis.get_cwf().get(s_space, s_time);
 			if (cw.weight <= W && cw.cost < best_cost) {
 				best_cost = cw.cost;
 				swap_point = count - 1;	// where swap position really happens
-				swap_sol = (size_t) j;
+				swap_sol = j;
 			}
 		}
 	}
@@ -515,11 +515,10 @@ void bicriteria_hybrid_index(ds2i::global_parameters const& params,
 		stxxl::syscall_file lpfile(lambdas_filename,
 				stxxl::file::DIRECT | stxxl::file::RDONLY);
 		lambda_vector_type lambda_points(&lpfile);
-
-		for (lambda_vector_type::iterator it = lambda_points.begin();
-				it != lambda_points.end(); it++) {
-			block_doc_freq_lambdas[it->block_id].push_back(
-					lambda_point { it->block_id, it->lambda, it->st });
+		for (auto const& lpid : lambda_vector_type::bufreader_type(
+				lambda_points)) {
+			block_doc_freq_lambdas[lpid.block_id].push_back(
+					lambda_point { lpid.block_id, lpid.lambda, lpid.st });
 		}
 	} else {
 		compute_lambdas(input_coll, predictors_filename, block_stats_filename,
@@ -573,8 +572,8 @@ void bicriteria_hybrid_index(ds2i::global_parameters const& params,
 
 	stats_line()("worker_threads", configuration::get().worker_threads)(
 			"greedy_time", elapsed_secs)("greedy_user_time", user_elapsed_secs);
-	logger() << "Found trade-off. Space: " << sol_final.get_space() << " Time: "
-			<< sol_final.get_time() << std::endl;
+	logger() << "Found trade-off. Space: " << sol_final.get_space()
+			<< "B, Time: " << sol_final.get_time() << " msecs" << std::endl;
 	stats_line()("found_space", sol_final.get_space())("found_time",
 			sol_final.get_time());
 

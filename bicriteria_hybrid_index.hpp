@@ -61,25 +61,25 @@ private:
 	double fix_bound;
 
 	std::string space_name(unsigned int value) {
-		if (value < kilo_num) {
+//		if (value < kilo_num) {
 			std::ostringstream ost;
 			ost << value << "B";
 			return ost.str();
-		} else if (value < mega_num) {
-			return prec_print(value, 8 * kilo_num, 2).append("KB");
-		} else {
-			return prec_print(value, 8 * mega_num, 2).append("MB");
-		}
+//		} else if (value < mega_num) {
+//			return prec_print(value, 8 * kilo_num, 2).append("KB");
+//		} else {
+//			return prec_print(value, 8 * mega_num, 2).append("MB");
+//		}
 	}
 
 	std::string time_name(unsigned int value) {
-		if (value < std::giga::num) {
+//		if (value < std::giga::num) {
 			std::ostringstream ost;
 			ost << (value / std::mega::num) << "msec";
 			return ost.str();
-		} else {
-			return prec_print(value, std::giga::num, 2).append("sec");
-		}
+//		} else {
+//			return prec_print(value, std::giga::num, 2).append("sec");
+//		}
 	}
 
 public:
@@ -243,7 +243,7 @@ public:
 
 	solution_info(size_t _space, double _time, block_id_type size) :
 			space(_space), time(_time) {
-		lp_indexs.assign(size * 2, 0);
+		lp_indexs.assign(size, 0);
 	}
 
 	// const reference can only call functions that end with const
@@ -363,6 +363,9 @@ public:
 
 		auto fix_bound = budget->get_fixed(max_weight, min_weight);
 		W = fix_bound.get_bound();
+
+		logger() << "buget is set to be " << budget->name() << ", namely "
+				<< fix_bound.name() << std::endl;
 
 		solution_dual _left(left, W, cwf);
 		solution_dual _right(right, W, cwf);
