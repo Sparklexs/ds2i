@@ -6,7 +6,9 @@
 #include "dec_time_prediction.hpp"
 
 namespace ds2i {
-const static uint8_t BLOCKSIZEOFFSET = 3;
+// 12  |345678
+// type|length
+const static uint8_t BLOCKSIZEOFFSET = 6;
 const static uint8_t BLOCKSIZEBASE = 128;
 
 struct mixed_block {
@@ -206,6 +208,8 @@ struct mixed_block {
 		compr_param_type m_docs_param, m_freqs_param;
 	};
 
+	// used for the scenario when we re-compress more than one block into
+	// a huge block
 	template<typename InputBlockData>
 	struct block_transformer<std::vector<InputBlockData>> {
 		block_transformer(typename std::vector<InputBlockData>::iterator it,
@@ -296,7 +300,7 @@ struct mixed_block {
 		block_type type = block_type::interpolative;
 		if (DS2I_LIKELY(n % block_size == 0)) {
 			assert(n == ((*in & 7) + 1) * 128);
-			type = (block_type) (*in++ >> 3);
+			type = (block_type) (*in++ >> BLOCKSIZEOFFSET);
 		}
 
 		// use ifs instead of a switch to enable DS2I_LIKELY
@@ -311,25 +315,6 @@ struct mixed_block {
 			__builtin_unreachable();
 		}
 	}
-
-	// XXX actually @n and @type should be known
-	// parameters of decode have to be form of the former one in
-	// order to be compatible with other codes
-	// @Deprecated
-//	static uint8_t const* decode(uint8_t const *in, uint32_t* out,
-//			uint32_t sum_of_values, block_type type, size_t n) {
-//		// use ifs instead of a switch to enable DS2I_LIKELY
-//		if (DS2I_LIKELY(type == block_type::varint)) { // optimize for the fastest codec
-//			return varint_G8IU_block::decode(in, out, sum_of_values, n);
-//		} else if (type == block_type::pfor) {
-//			return optpfor_block::decode(in, out, sum_of_values, n);
-//		} else if (type == block_type::interpolative) {
-//			return interpolative_block::decode(in, out, sum_of_values, n);
-//		} else {
-//			assert(false);
-//			__builtin_unreachable();
-//		}
-//	}
 };
 
 typedef std::vector<ds2i::time_prediction::predictor> predictors_vec_type;

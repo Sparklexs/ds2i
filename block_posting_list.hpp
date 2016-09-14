@@ -55,7 +55,6 @@ struct block_posting_list {
 		}
 	}
 
-
 	// different from the above "write", here the input_blocks are already
 	// compressed, we first decode then re-encode append each block inside
 	// @input_blocks to @out.
@@ -269,6 +268,8 @@ struct block_posting_list {
 				blocks.back().doc_gaps_universe = gaps_universe;
 				blocks.back().max = block_max(b);
 
+				// Here decode is only used to find pointers to each block
+				// after this the block will be decoded again if to access
 				uint8_t const* freq_ptr = BlockCodec::decode(ptr, buf.data(),
 						gaps_universe, cur_block_size);
 				blocks.back().freqs_begin = freq_ptr;
@@ -339,8 +340,7 @@ struct block_posting_list {
 		uint32_t m_cur_block_size;
 		uint32_t m_cur_docid;
 
-		uint8_t const* m_freqs_block_data;
-		bool m_freqs_decoded;
+		uint8_t const* m_freqs_block_data;bool m_freqs_decoded;
 
 		std::vector<uint32_t> m_docs_buf;
 		std::vector<uint32_t> m_freqs_buf;
@@ -350,9 +350,13 @@ struct block_posting_list {
 
 };
 
+// SXS: I specialize this struct to use it re-compress
+// blocks with original mixed_block and variable-sized
+// mixed_blocks
 template<bool Profile>
 struct block_posting_list<ds2i::mixed_block, Profile> {
 
+	//this method doesn't suit for blocks larger than 128
 	template<typename DocsIterator, typename FreqsIterator>
 	static void write(std::vector<uint8_t>& out, uint32_t n,
 			DocsIterator docs_begin, FreqsIterator freqs_begin) {
@@ -638,6 +642,8 @@ struct block_posting_list<ds2i::mixed_block, Profile> {
 				blocks.back().doc_gaps_universe = gaps_universe;
 				blocks.back().max = block_max(b);
 
+				// Here decode is only used to find pointers to each block
+				// after this the block will be decoded again if to access
 				uint8_t const* freq_ptr = ds2i::mixed_block::decode(ptr,
 						buf.data(), gaps_universe, cur_block_size);
 				blocks.back().freqs_begin = freq_ptr;
@@ -715,7 +721,7 @@ struct block_posting_list<ds2i::mixed_block, Profile> {
 		uint32_t m_blocks;
 		uint8_t const* m_block_maxs;
 		uint8_t const* m_block_endpoints;
-		uint8_t const* m_blocks_data;
+		uint8_t const* m_blocks_data; // start pos of compressed data
 		uint64_t m_universe;
 
 		uint32_t m_cur_block;
@@ -727,8 +733,7 @@ struct block_posting_list<ds2i::mixed_block, Profile> {
 
 		// after decoding docid of current block, it is set
 		// pointing to start position of compressed freq
-		uint8_t const* m_freqs_block_data;
-		bool m_freqs_decoded;
+		uint8_t const* m_freqs_block_data;bool m_freqs_decoded;
 
 		// buffers storing docids and freqs of current block
 		std::vector<uint32_t> m_docs_buf;

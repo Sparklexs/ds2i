@@ -191,8 +191,116 @@ struct optpfor_block {
 			return b;
 		}
 
+		// @param nvalue denote the length of input blocks when first passed in
+		// mostly copy from newpfor, the only change is to change @param len
+		// from BlockSize to nvalue
+		void encodeBlock(const uint32_t *in, uint32_t *out, size_t &nvalue) {
+			const uint32_t len = nvalue;
+			uint32_t b = findBestB(in, len);
+			if (b < 32) {
+
+				uint32_t nExceptions = 0;
+				size_t encodedExceptions_sz = 0;
+
+				const uint32_t * const initout(out);
+				for (uint32_t i = 0; i < len; i++) {
+
+					if (in[i] >= (1U << b)) {
+						tobecoded[i] = in[i] & ((1U << b) - 1);
+						exceptionsPositions[nExceptions] = i;
+						exceptionsValues[nExceptions] = (in[i] >> b);
+						nExceptions++;
+					} else {
+						tobecoded[i] = in[i];
+					}
+				}
+
+				if (nExceptions > 0) {
+
+					for (uint32_t i = nExceptions - 1; i > 0; i--) {
+						const uint32_t cur = exceptionsPositions[i];
+						const uint32_t prev = exceptionsPositions[i - 1];
+
+						exceptionsPositions[i] = cur - prev;
+					}
+
+					for (uint32_t i = 0; i < nExceptions; i++) {
+
+						exceptions[i] =
+								(i > 0) ?
+										exceptionsPositions[i] - 1 :
+										exceptionsPositions[i];
+						exceptions[i + nExceptions] = exceptionsValues[i] - 1;
+					}
+				}
+
+				if (nExceptions > 0)
+					ecoder.encodeArray(&exceptions[0], 2 * nExceptions, out + 1,
+							encodedExceptions_sz);
+				*out++ = (b << (PFORDELTA_NEXCEPT + PFORDELTA_EXCEPTSZ))
+						| (nExceptions << PFORDELTA_EXCEPTSZ)
+						| static_cast<uint32_t>(encodedExceptions_sz);
+				/* Write exceptional values */
+
+				out += static_cast<uint32_t>(encodedExceptions_sz);
+				for (uint32_t i = 0; i < len; i += 32) {
+					FastPFor::fastpackwithoutmask(&tobecoded[i], out, b);
+					out += b;
+				}
+				nvalue = out - initout;
+
+			} else {
+				*out++ = (b << (PFORDELTA_NEXCEPT + PFORDELTA_EXCEPTSZ));
+				for (uint32_t i = 0; i < len; i++)
+					out[i] = in[i];
+				nvalue = len + 1;
+			}
+		}
+
+		// @param nvalue denote the length of input blocks when first passed in
+		// mostly copy from newpfor, the only change is to change @param len
+		// from BlockSize to nvalue
+		const uint32_t* decodeBlock(const uint32_t* in, uint32_t* out,
+				size_t& nvalue) {
+			const uint32_t len = nvalue;
+			const uint32_t * const initout(out);
+			const uint32_t b = *in >> (32 - PFORDELTA_B);
+			const size_t nExceptions = (*in
+					>> (32 - (PFORDELTA_B + PFORDELTA_NEXCEPT)))
+					& ((1 << PFORDELTA_NEXCEPT) - 1);
+			const uint32_t encodedExceptionsSize = *in
+					& ((1 << PFORDELTA_EXCEPTSZ) - 1);
+
+			size_t twonexceptions = 2 * nExceptions;
+			++in;
+			if (encodedExceptionsSize > 0)
+				ecoder.decodeArray(in, encodedExceptionsSize, &exceptions[0],
+						twonexceptions);
+			assert(twonexceptions >= 2 * nExceptions);
+			in += encodedExceptionsSize;
+
+			uint32_t * beginout(out);		// we use this later
+
+			for (uint32_t j = 0; j < len; j += 32) {
+				FastPFor::fastunpack(in, out, b);
+				in += b;
+				out += 32;
+			}
+
+			for (uint32_t e = 0, lpos = -1; e < nExceptions; e++) {
+				lpos += exceptions[e] + 1;
+				beginout[lpos] |= (exceptions[e + nExceptions] + 1) << b;
+			}
+
+			nvalue = out - initout;
+			return in;
+		}
+
 		void setBlockSize(uint32_t _size) {
-			this->BlockSize = _size;
+			// we cannot change the value of @param BlockSize like the
+			// following expression, because it is a constant rvalue.
+			// so we rewrite the function encodeBlock and decodeBlock.
+			// this->BlockSize = _size;
 			this->exceptionsPositions.resize(_size);
 			this->exceptionsValues.resize(_size);
 			this->exceptions.resize(4 * _size + this->TAIL_MERGIN + 1);
@@ -219,7 +327,7 @@ struct optpfor_block {
 			optpfor_codec.setBlockSize(n);
 		buf.resize(2 * 4 * n);
 
-		size_t out_len = buf.size();
+		size_t out_len = n;
 		optpfor_codec.force_b = b;
 		optpfor_codec.encodeBlock(in, reinterpret_cast<uint32_t*>(buf.data()),
 				out_len);
@@ -265,7 +373,7 @@ struct varint_G8IU_block {
 			uint8_t desc = *src;
 			src += 1;
 			const __m128i data = _mm_lddqu_si128(
-					reinterpret_cast<__m128i                                        const *>(src));
+					reinterpret_cast<__m128i                                                     const *>(src));
 			src += 8;
 			const __m128i result = _mm_shuffle_epi8(data, vecmask[desc][0]);
 			_mm_storeu_si128(reinterpret_cast<__m128i *>(dst), result);
