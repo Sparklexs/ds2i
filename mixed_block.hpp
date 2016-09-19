@@ -145,7 +145,7 @@ struct mixed_block {
 
 				uint16_t space = (uint16_t) buf.size();
 				float time = 0;
-				if (values.size() == block_size) { // only predict time for full blocks
+				if (values.size() % block_size == 0) { // only predict time for full blocks
 					time = predictors[t](fv) * access_count;
 				}
 				points.push_back(

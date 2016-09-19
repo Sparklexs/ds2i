@@ -9,6 +9,7 @@
 #include "util.hpp"
 
 namespace ds2i {
+// (2016.09.18) none of the three encoders need @param sum_of_values
 
 // (2016.05.25)NOTE: deocde returns pointer to the source vector (namely the compressed
 // one), and it points the the position where values haven't been decoded.
@@ -373,7 +374,7 @@ struct varint_G8IU_block {
 			uint8_t desc = *src;
 			src += 1;
 			const __m128i data = _mm_lddqu_si128(
-					reinterpret_cast<__m128i                                                     const *>(src));
+					reinterpret_cast<__m128i                                                        const *>(src));
 			src += 8;
 			const __m128i result = _mm_shuffle_epi8(data, vecmask[desc][0]);
 			_mm_storeu_si128(reinterpret_cast<__m128i *>(dst), result);
