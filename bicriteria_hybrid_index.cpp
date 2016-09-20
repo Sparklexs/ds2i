@@ -52,14 +52,12 @@ dual_basis initializeSpaceTimeSolutions(
 		// indexes are naturally 0s and size()-1
 		sol_info_time.get_index()[i++] = it->second.size() - 1;
 	}
-#ifndef NDEBUG
+//#ifndef NDEBUG
 	logger() << "space-optimal solution: S = " << sol_info_space.get_space()
-			<< " bytes, T = " << sol_info_space.get_time() << " nanoseconds"
-			<< std::endl;
+			<< "B, T = " << sol_info_space.get_time() << "ns" << std::endl;
 	logger() << "time-optimal solution: S = " << sol_info_time.get_space()
-			<< " bytes, T = " << sol_info_time.get_time() << " nanoseconds"
-			<< std::endl;
-#endif
+			<< "B, T = " << sol_info_time.get_time() << "ns" << std::endl;
+//#endif
 	return dual_basis(sol_info_time, sol_info_space, budget);
 }
 
@@ -378,7 +376,7 @@ struct lambdas_computer: ds2i::semiasync_queue::job {
 };
 
 template<typename InputCollectionType>
-void compute_lambdas(InputCollectionType const& input_coll,
+void computeLambdas(InputCollectionType const& input_coll,
 		const char* predictors_filename, const char* block_stats_filename,
 		const char* lambdas_filename,
 		block_lambdas_type& block_doc_freq_lambdas) {
@@ -492,10 +490,9 @@ void bicriteria_hybrid_index(ds2i::global_parameters const& params,
 			partial_blocks += 2; // docid and freq
 		}
 	}
-	logger() << num_blocks << " overall blocks" << std::endl;
-	logger() << partial_blocks << " partial blocks" << std::endl;
-	logger() << space_base << " bytes (not including compressed blocks)"
-			<< std::endl;
+	logger() << num_blocks << " overall blocks, " << partial_blocks
+			<< " partial blocks, " << space_base
+			<< " bytes (not including compressed blocks)" << std::endl;
 
 	/*****************************************************
 	 * call the function that build the mixed-index
@@ -521,7 +518,7 @@ void bicriteria_hybrid_index(ds2i::global_parameters const& params,
 					lambda_point { lpid.block_id, lpid.lambda, lpid.st });
 		}
 	} else {
-		compute_lambdas(input_coll, predictors_filename, block_stats_filename,
+		computeLambdas(input_coll, predictors_filename, block_stats_filename,
 				lambdas_filename, block_doc_freq_lambdas);
 
 	}
@@ -573,7 +570,7 @@ void bicriteria_hybrid_index(ds2i::global_parameters const& params,
 	stats_line()("worker_threads", configuration::get().worker_threads)(
 			"greedy_time", elapsed_secs)("greedy_user_time", user_elapsed_secs);
 	logger() << "Found trade-off. Space: " << sol_final.get_space()
-			<< "B, Time: " << sol_final.get_time() << " msecs" << std::endl;
+			<< "B, Time: " << sol_final.get_time() << "ns" << std::endl;
 	stats_line()("found_space", sol_final.get_space())("found_time",
 			sol_final.get_time());
 
