@@ -36,8 +36,25 @@ void test_block_codec() {
 			if (size > 128 && tcase == 1) {
 				std::cout << "uncompressed size: " << size << std::endl;
 				std::cout << "compressed size: " << encoded.size() << std::endl;
+
+				ds2i::time_prediction::feature_vector fv;
+				ds2i::time_prediction::values_statistics(values, fv);
+				std::cout << "entropy: "
+						<< fv[ds2i::time_prediction::feature_type::entropy]
+						<< std::endl;
+
 				std::vector<uint8_t> temp;
 				for (uint32_t i = 0; i < size / 128; i++) {
+
+					std::vector<uint32_t> subset;
+					for (uint32_t j = 0; j < 128; j++) {
+						subset.push_back(values[j + 128 * i]);
+					}
+					ds2i::time_prediction::values_statistics(subset, fv);
+					std::cout << i << " entropy:"
+							<< fv[ds2i::time_prediction::feature_type::entropy]
+							<< std::endl;
+
 					temp.clear();
 					BlockCodec::encode(values.data() + 128 * i, sum_of_values,
 							128, temp);
