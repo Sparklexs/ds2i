@@ -118,12 +118,6 @@ struct mixed_block {
 		block_type type;
 		compr_param_type param;
 
-		// only save part of feature_vector
-		// must be power of 2
-		double sum_of_logs;
-		uint32_t nonzeros;
-		uint32_t max_b;
-
 		bool operator<(space_time_point const& other) const {
 			return std::make_pair(space, time)
 					< std::make_pair(other.space, other.time);
@@ -160,10 +154,7 @@ struct mixed_block {
 					time = predictors[t](fv) * access_count;
 				}
 				points.push_back(
-						space_time_point { time, space, block_type(type), param,
-								fv[feature_type::sum_of_logs],
-								fv[feature_type::nonzeros],
-								fv[feature_type::max_b] });
+						space_time_point { time, space, block_type(type), param });
 			}
 		}
 
