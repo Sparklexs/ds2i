@@ -115,7 +115,7 @@ namespace ds2i { namespace time_prediction {
         size_t group_begin = 0;
         double entropy = 0;
         double sum_of_logs = 0;
-        double nonzeros = 0;
+        size_t nonzeros = 0;
         uint32_t max_b = 0;
 
         for (size_t i = 1; i <= values.size(); ++i) {
