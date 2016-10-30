@@ -29,6 +29,7 @@
 #include "index_build_utils.hpp"
 #include "bicriteria_hybrid_index.hpp"
 
+// return two extreme paths which are time-optimal and space-optimal respectively.
 dual_basis initializeSpaceTimeSolutions(
 		block_lambdas_type& block_doc_freq_lambdas,
 		std::shared_ptr<bound> budget, size_t space_base, double time_base) {
@@ -123,11 +124,11 @@ solution_info swapPath(dual_basis & basis,
 	if (basis.get_cwf().get(s_1.get_space(), s_1.get_time()).weight <= W)
 		return s_1;
 
-	std::array<std::vector<int>::iterator, 2> sol_its = {
+	std::array<std::vector<uint32_t>::iterator, 2> sol_its = {
 			s_1.get_index().begin(), s_2.get_index().begin() };
 
-	unsigned int swap_sol, swap_point;
-	swap_sol = swap_point = std::numeric_limits<unsigned int>::max();
+	uint32_t swap_sol, swap_point;
+	swap_sol = swap_point = std::numeric_limits<uint32_t>::max();
 	double best_cost = std::numeric_limits<double>::max();
 
 	std::array<size_t, 2> head_spaces { { space_base, space_base } },
@@ -139,6 +140,7 @@ solution_info swapPath(dual_basis & basis,
 	while (sol_its[0] != s_1.get_index().end()
 			&& sol_its[1] != s_2.get_index().end()) {
 
+		static uint32_t count = 0;
 		// 1. skip over blocks using same encoding parameters
 
 		// after this while-loop, head contains blocks[0, the first not equal)
@@ -171,7 +173,7 @@ solution_info swapPath(dual_basis & basis,
 			tail_times[1] -= head_times[1];
 		}
 		// transfer the non-equivalent blocks from tail to head
-		for (int i = 0; i < 2; i++) {
+		for (uint32_t i = 0; i < 2; i++) {
 
 			head_spaces[i] +=
 					block_doc_freq_lambdas[count][*sol_its[i]].st.space;
@@ -187,7 +189,7 @@ solution_info swapPath(dual_basis & basis,
 
 		// 2. try to swap blocks to get better tradeoffs
 		// try different combinations of (head,tail)
-		for (int j = 0; j < 2; j++) {
+		for (uint32_t j = 0; j < 2; j++) {
 			auto s_space = head_spaces[j] + tail_spaces[(j + 1) % 2];
 			auto s_time = head_times[j] + tail_times[(j + 1) % 2];
 			cost_weight cw = basis.get_cwf().get(s_space, s_time);
@@ -220,38 +222,190 @@ solution_info swapPath(dual_basis & basis,
 	return s_2;
 }
 
+// @param endpoints is used to denote the index of each posting list on lambdas
+// @param spans is used to denote each size of mixed block
+template<typename InputCollectionType>
+void mergeBlocks(InputCollectionType &input_coll, block_lambdas_type &lambdas,
+		std::vector<uint32_t>::iterator single_block_it, std::vector<uint32_t> &spans,
+		std::vector<uint32_t> &endpoints, const char* block_stats_filename) {
+	std::ifstream block_stats(block_stats_filename);
+	uint32_t current_list_id;
+	std::vector<block_id_type> block_counts;
+	bool block_counts_consumed = true;
+
+	auto ratio = [=](block_id_type ac, block_id_type ac_last)-> double {
+		return ((double)std::abs(ac-ac_last))/std::max(ac,ac_last);
+	};
+
+	size_t base = 0;
+	for (size_t l = 0; l < input_coll.size(); ++l) {
+
+		if (block_counts_consumed) {
+			block_counts_consumed = false;
+			ds2i::time_prediction::read_block_stats(block_stats,
+					current_list_id, block_counts);
+		}
+
+		ds2i::mixed_block::block_type last_doc_type, last_freq_type;
+		ds2i::mixed_block::compr_param_type last_doc_param, last_freq_param;
+
+		uint32_t num_merged = 1;
+		last_doc_type = lambdas[base][single_block_it[base]].st.type;
+		last_doc_param = lambdas[base][single_block_it[base]].st.param;
+		last_freq_type = lambdas[base + 1][single_block_it[base + 1]].st.type;
+		last_freq_param = lambdas[base + 1][single_block_it[base + 1]].st.param;
+
+		auto e = input_coll[l];
+
+		if (l == current_list_id) {
+			block_counts_consumed = true;
+			block_id_type last_doc_access_count, last_freq_access_count;
+
+			// note here we don't need to align the block access_count to the
+			// maximal one
+			for (uint32_t i = 2; i < 2 * e.num_blocks(); i += 2) {
+				// doc
+				block_id_type doc_access_count = block_counts[i];
+				ds2i::mixed_block::block_type doc_type =
+						lambdas[base + i][single_block_it[base + i]].st.type;
+				ds2i::mixed_block::compr_param_type doc_param =
+						lambdas[base + i][single_block_it[base + i]].st.param;
+				//freq
+				block_id_type freq_access_count = block_counts[i + 1];
+				ds2i::mixed_block::block_type freq_type =
+						lambdas[base + i + 1][single_block_it[base + i + 1]].st.type;
+				ds2i::mixed_block::compr_param_type freq_param = lambdas[base
+						+ i + 1][single_block_it[base + i + 1]].st.param;
+
+				if (num_merged < 8) {
+					if (doc_type == last_doc_type
+							&& std::abs(doc_param - last_doc_param) <= 2
+							&& freq_type == last_freq_type
+							&& std::abs(freq_param - last_freq_param) <= 2
+							&& ratio(doc_access_count, last_doc_access_count)
+									<= 0.1
+							&& ratio(freq_access_count, last_freq_access_count)
+									<= 0.1) {
+						num_merged++;
+					} else {
+						spans.push_back(num_merged);
+						num_merged = 1;
+					}
+				} else {
+					spans.push_back(num_merged);
+					num_merged = 1;
+				}
+
+				last_doc_access_count = doc_access_count;
+				last_doc_param = doc_param;
+				last_doc_type = doc_type;
+				last_freq_access_count = freq_access_count;
+				last_freq_param = freq_param;
+				last_freq_type = freq_type;
+			}
+
+		} else {
+			// all the access count equals to 0
+			for (size_t i = 2; i < 2 * e.num_blocks(); i += 2) {
+				// doc
+				ds2i::mixed_block::block_type doc_type =
+						lambdas[base + i][single_block_it[base + i]].st.type;
+				ds2i::mixed_block::compr_param_type doc_param =
+						lambdas[base + i][single_block_it[base + i]].st.param;
+				//freq
+				ds2i::mixed_block::block_type freq_type =
+						lambdas[base + i + 1][single_block_it[base + i + 1]].st.type;
+				ds2i::mixed_block::compr_param_type freq_param = lambdas[base
+						+ i + 1][single_block_it[base + i + 1]].st.param;
+
+				if (num_merged <= 8) {
+					if (doc_type == last_doc_type
+							&& std::abs(doc_param - last_doc_param) <= 2
+							&& freq_type == last_freq_type
+							&& std::abs(freq_param - last_freq_param) <= 2) {
+						num_merged++;
+					} else {
+						spans.push_back(num_merged);
+						num_merged = 1;
+					}
+				} else {
+					spans.push_back(num_merged);
+					num_merged = 1;
+				}
+				last_doc_param = doc_param;
+				last_doc_type = doc_type;
+				last_freq_param = freq_param;
+				last_freq_type = freq_type;
+			}
+		}
+		spans.push_back(num_merged);
+		endpoints.push_back(spans.size());
+		base += e.num_blocks();
+	}
+//	std::cout << std::accumulate(spans.begin(), spans.end(), 0) << std::endl;
+//	std::cout << lambdas.size() / 2 << std::endl;
+}
+
+/*
+ * @param index_it starts from the beginning of the current posting list rather than
+ * 		  the whole index.
+ */
 template<typename InputCollectionType, typename CollectionBuilder>
 struct list_transformer: ds2i::semiasync_queue::job {
 	list_transformer(CollectionBuilder& b,
 			typename InputCollectionType::document_enumerator e,
 			block_lambdas_type & block_doc_freq_lambdas,
-			block_id_type block_id_base, std::vector<int>::iterator index_it,
+			block_id_type block_id_base,
+			std::vector<uint32_t>::iterator _index_it,
+			std::vector<uint32_t>::iterator _spans_it,
 			ds2i::progress_logger& plog) :
-			m_b(b), m_e(e), lambdas(block_doc_freq_lambdas), it(index_it), base(
-					block_id_base), m_plog(plog) {
+			m_b(b), m_e(e), lambdas(block_doc_freq_lambdas), index_it(
+					_index_it), spans_it(_spans_it), base(block_id_base), m_plog(
+					plog) {
 	}
 
 	virtual void prepare() {
 		using namespace ds2i;
 
 		typedef typename InputCollectionType::document_enumerator::block_data input_block_type;
-		typedef mixed_block::block_transformer<input_block_type> output_block_type;
+		typedef mixed_block::block_transformer<std::vector<input_block_type>> output_block_type;
 
 		auto blocks = m_e.get_blocks();
 		std::vector<output_block_type> blocks_to_transform;
 
-		for (auto const& input_block : blocks) {
+		uint32_t i = 0, j = 0, num_merged = 0;
+		while (j < m_e.num_blocks()) {
+			auto docs_type = lambdas[base + j * 2][index_it[j * 2]].st.type;
+			auto docs_param = lambdas[base + j * 2][index_it[j * 2]].st.param;
+			auto freqs_type =
+					lambdas[base + j * 2 + 1][index_it[j * 2 + 1]].st.type;
+			auto freqs_param =
+					lambdas[base + j * 2 + 1][index_it[j * 2 + 1]].st.param;
 
-			auto docs_type = lambdas[base][*it].st.type;
-			auto docs_param = lambdas[base++][*it++].st.param;
-			auto freqs_type = lambdas[base][*it].st.type;
-			auto freqs_param = lambdas[base++][*it++].st.param;
-			blocks_to_transform.emplace_back(input_block, docs_type, freqs_type,
-					docs_param, freqs_param);
+			num_merged = spans_it[i++];
+
+			std::vector<input_block_type> blocks_to_merge(num_merged);
+			std::copy(blocks.begin() + j, blocks.begin() + num_merged + j,
+					blocks_to_merge.begin());
+			// blocks and parameters for compression to be transfered are now ready.
+			blocks_to_transform.emplace_back(blocks_to_merge, docs_type,
+					freqs_type, docs_param, freqs_param);
+
+			j += num_merged;
+
 		}
-
-		block_posting_list<mixed_block>::write_blocks(m_buf, m_e.size(),
-				blocks_to_transform);
+//
+//		for (auto const& input_block : blocks) {
+//
+//			auto docs_type = lambdas[base][*index_it].st.type;
+//			auto docs_param = lambdas[base++][*index_it++].st.param;
+//			auto freqs_type = lambdas[base][*index_it].st.type;
+//			auto freqs_param = lambdas[base++][*index_it++].st.param;
+//			blocks_to_transform.emplace_back(input_block, docs_type, freqs_type,
+//					docs_param, freqs_param);
+//		}
+//		block_posting_list<mixed_block>::write_blocks(m_buf, m_e.size(),
+//				blocks_to_transform);
 	}
 
 	virtual void commit() {
@@ -264,7 +418,8 @@ struct list_transformer: ds2i::semiasync_queue::job {
 	CollectionBuilder& m_b;
 	typename InputCollectionType::document_enumerator m_e;
 	block_lambdas_type & lambdas;
-	std::vector<int>::iterator it;
+	std::vector<uint32_t>::iterator index_it;
+	std::vector<uint32_t>::iterator spans_it;
 	block_id_type base;
 	ds2i::progress_logger& m_plog;
 	std::vector<uint8_t> m_buf;
@@ -352,7 +507,7 @@ struct lambdas_computer: ds2i::semiasync_queue::job {
 	virtual void commit() {
 		std::copy(m_points_buf.begin(), m_points_buf.end(),
 				std::back_inserter(m_lambda_points));
-//		for (int i = 0; i < m_block_lambdas.size(); i++) {
+//		for (uint32_t i = 0; i < m_block_lambdas.size(); i++) {
 //			std::cout << m_block_lambdas[i][0].block_id << std::endl;
 //		}
 //		for (block_lambdas_type::iterator it = m_block_lambdas.begin();
@@ -383,7 +538,7 @@ void computeLambdas(InputCollectionType const& input_coll,
 	using namespace ds2i;
 	using namespace time_prediction;
 
-	logger() << "Computing m_lambdas" << std::endl;
+	logger() << "Computing lambdas" << std::endl;
 	progress_logger plog;
 
 	auto predictors = load_predictors(predictors_filename);
@@ -478,7 +633,7 @@ void bicriteria_hybrid_index(ds2i::global_parameters const& params,
 
 	size_t num_blocks = 0;
 	size_t partial_blocks = 0;
-	size_t space_base = 8; // space overhead independent of block compression method
+	size_t space_base = 8;// space overhead independent of block compression method
 	for (size_t l = 0; l < input_coll.size(); ++l) {
 		auto e = input_coll[l]; // e should be block_posting_list
 		num_blocks += 2 * e.num_blocks();
@@ -495,15 +650,15 @@ void bicriteria_hybrid_index(ds2i::global_parameters const& params,
 			<< " partial blocks, " << space_base
 			<< " bytes (not including compressed blocks)" << std::endl;
 
-	/*****************************************************
-	 * call the function that build the mixed-index
-	 ****************************************************/
+/*****************************************************
+ * call the function that build the mixed-index
+ ****************************************************/
 
-	// global variables
+// global variables
 	block_lambdas_type block_doc_freq_lambdas;
 	solution_info sol_final;
 
-	// FIRST, compute the lambdas for all the block
+// FIRST, compute the lambdas for all the block
 
 	if (boost::filesystem::exists(lambdas_filename)) {
 		logger() << "Found lambdas file " << lambdas_filename
@@ -530,15 +685,6 @@ void bicriteria_hybrid_index(ds2i::global_parameters const& params,
 	logger() << "now we have calculated all the lambdas for " << num_blocks
 			<< " blocks in current list." << std::endl;
 #endif
-
-	//SECOND, find the optimal encodings of each block
-//	char type = 'T';
-//
-//	for (float var = 0.4; var < 1.1; var += 0.1) {
-//		std::ostringstream ostr;
-//		ostr << var << type;
-//		budget = add_bound(ostr.str().c_str());
-//		logger() << "********budget: " << ostr.str() << "********" << std::endl;
 
 	double tick = get_time_usecs();
 	double user_tick = get_user_time_usecs();
@@ -584,7 +730,15 @@ void bicriteria_hybrid_index(ds2i::global_parameters const& params,
 	stats_line()("found_space", sol_final.get_space())("found_time",
 			sol_final.get_time());
 
-	// THIRD, re-compress all the blocks OR collect statistics
+// THIRD, merge blocks that are similar
+	// index iterator for each single block
+	auto index_it = sol_final.get_index().begin();
+	std::vector<uint32_t> spans, endpoints;
+
+	mergeBlocks(input_coll, block_doc_freq_lambdas, index_it, spans, endpoints,
+			block_stats_filename);
+
+// FOURTH, re-compress all the blocks OR collect statistics
 	if (output_filename) {
 		typedef typename block_mixed_index::builder builder_type;
 		builder_type builder(input_coll.num_docs(), params);
@@ -594,23 +748,26 @@ void bicriteria_hybrid_index(ds2i::global_parameters const& params,
 		tick = get_time_usecs();
 		user_tick = get_user_time_usecs();
 
-		std::vector<int>::iterator it = sol_final.get_index().begin();
-
 		block_id_type block_base = 0;
+		std::vector<uint32_t>::iterator spans_it, endpoints_it;
+		spans_it = spans.begin();
+		endpoints_it = endpoints.begin();
+
 		for (size_t l = 0; l < input_coll.size(); ++l) {
 			auto e = input_coll[l];
 
 			typedef list_transformer<InputCollectionType, builder_type> job_type;
 			std::shared_ptr<job_type> job(
 					new job_type(builder, e, block_doc_freq_lambdas, block_base,
-							it, plog));
+							index_it, spans_it, plog));
 			block_base += 2 * e.num_blocks();
-			it += 2 * e.num_blocks();
+			index_it += 2 * e.num_blocks();
+			spans_it += endpoints_it[l];
 			queue.add_job(job, 2 * e.size());
 		}
 
 		assert(block_base == num_blocks);
-		assert(it == sol_final.get_index().end());
+		assert(index_it == sol_final.get_index().end());
 		queue.complete();
 		plog.log();
 
@@ -631,15 +788,15 @@ void bicriteria_hybrid_index(ds2i::global_parameters const& params,
 
 		succinct::mapper::freeze(coll, output_filename);
 		logger() << "Dumping finished." << std::endl;
-
 	} else {
 		// collect statistics of blocks using different encoders
 		std::map<type_param_pair, size_t> type_counts;
-		auto it = sol_final.get_index().begin();
-		for (block_id_type i = 0; i < sol_final.get_index().size(); i++, it++) {
+
+		for (block_id_type i = 0; i < sol_final.get_index().size();
+				i++, index_it++) {
 			type_counts[type_param_pair(
-					(uint8_t) block_doc_freq_lambdas[i][*it].st.type,
-					block_doc_freq_lambdas[i][*it].st.param)] += 1;
+					(uint8_t) block_doc_freq_lambdas[i][*index_it].st.type,
+					block_doc_freq_lambdas[i][*index_it].st.param)] += 1;
 		}
 		std::vector<std::pair<type_param_pair, size_t>> type_counts_vec;
 		for (uint8_t t = 0; t < mixed_block::block_types; ++t) {

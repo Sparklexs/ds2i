@@ -41,7 +41,7 @@ public:
 	}
 };
 
-std::string prec_print(unsigned int num, unsigned int den, unsigned int prec) {
+std::string prec_print(uint32_t num, uint32_t den, uint32_t prec) {
 	std::stringstream ss;
 	if (num % den == 0) {
 		ss << num / den;
@@ -52,8 +52,8 @@ std::string prec_print(unsigned int num, unsigned int den, unsigned int prec) {
 	return ss.str();
 }
 
-unsigned int kilo_num = 1024;
-unsigned int mega_num = 1048576;
+uint32_t kilo_num = 1024;
+uint32_t mega_num = 1048576;
 
 class fixed_bound: public bound {
 private:
@@ -238,7 +238,7 @@ private:
 	size_t space;
 	double time;
 	// index of encoders chosen for current block
-	std::vector<int> lp_indexs;
+	std::vector<uint32_t> lp_indexs;
 public:
 	solution_info() {
 	}
@@ -263,7 +263,7 @@ public:
 		lp_indexs = si.get_index();
 	}
 
-	std::vector<int> &get_index() {
+	std::vector<uint32_t> &get_index() {
 		return lp_indexs;
 	}
 
@@ -290,7 +290,7 @@ private:
 	double W;
 //	solution_info *si;
 	// lambda_points_index of blocks in current list
-	//	std::vector<int> lp_indexs;
+	//	std::vector<uint32_t> lp_indexs;
 public:
 	solution_dual(solution_info &si, double _W, const cw_factory cwf) :
 			W(_W) {

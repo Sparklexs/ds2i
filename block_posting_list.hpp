@@ -40,6 +40,7 @@ struct block_posting_list {
 
 				freqs_buf[i] = *freqs_it++ - 1;
 			}
+			// max
 			*((uint32_t*) &out[begin_block_maxs + 4 * b]) = last_doc;
 
 			BlockCodec::encode(docs_buf.data(),
@@ -47,6 +48,7 @@ struct block_posting_list {
 					cur_block_size, out);
 			BlockCodec::encode(freqs_buf.data(), uint32_t(-1), cur_block_size,
 					out);
+			//end point
 			if (b != blocks - 1) {
 				*((uint32_t*) &out[begin_block_endpoints + 4 * b]) = out.size()
 						- begin_blocks;
@@ -246,6 +248,7 @@ struct block_posting_list {
 			uint8_t const* end;
 		};
 
+		//here each block denote <docid,freq>
 		std::vector<block_data> get_blocks() {
 			std::vector<block_data> blocks;
 
@@ -328,7 +331,7 @@ struct block_posting_list {
 
 		uint32_t m_n;
 		uint8_t const* m_base;
-		uint32_t m_blocks;
+		uint32_t m_blocks; // note only accounts docid_block
 		uint8_t const* m_block_maxs;
 		uint8_t const* m_block_endpoints;
 		uint8_t const* m_blocks_data;
@@ -430,6 +433,8 @@ struct block_posting_list<ds2i::mixed_block, Profile> {
 
 		uint64_t blocks = input_blocks.size();
 		size_t begin_block_maxs = out.size();
+		// TODO: if the blocks are variable-sized, then some of the following two
+		// pointers will be wasted
 		size_t begin_block_endpoints = begin_block_maxs + 4 * blocks;
 		size_t begin_blocks = begin_block_endpoints + 4 * (blocks - 1);
 		out.resize(begin_blocks);
@@ -617,6 +622,7 @@ struct block_posting_list<ds2i::mixed_block, Profile> {
 			uint8_t const* end;
 		};
 
+		//here each block denote <docid,freq>
 		std::vector<block_data> get_blocks() {
 			std::vector<block_data> blocks;
 

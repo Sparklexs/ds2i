@@ -217,28 +217,29 @@ struct mixed_block {
 	// a huge block
 	template<typename InputBlockData>
 	struct block_transformer<std::vector<InputBlockData>> {
-		block_transformer(typename std::vector<InputBlockData>::iterator it,
-				size_t blocknum, block_type docs_type, block_type freqs_type,
+		block_transformer(typename std::vector<InputBlockData> blocks,
+				block_type docs_type, block_type freqs_type,
 				compr_param_type docs_param, compr_param_type freqs_param) :
-				m_input_block_it(it), m_blocknum(blocknum), index(it->index), max(
-						0), m_docs_type(docs_type), m_freqs_type(freqs_type), m_docs_param(
+				m_input_block(blocks), /*index(blocks->index), max(0),*/m_docs_type(
+						docs_type), m_freqs_type(freqs_type), m_docs_param(
 						docs_param), m_freqs_param(freqs_param) {
 			// XXX the key is use iterator to calculate the universe or other info
 			// keep in mind blocks are interleaved with docid and freq
-			for (int i = 0; i < blocknum * 2; i++) {
-				size += it[i * 2].size;
-				max = std::max(max, it[i * 2].max);
-				doc_gaps_universe += it[i * 2].doc_gaps_universe;
+			m_blocknum = blocks.size();
+			for (int i = 0; i < m_blocknum * 2; i++) {
+				size += blocks[i * 2].size;
+//				max = std::max(max, blocks[i * 2].max);
+				doc_gaps_universe += blocks[i * 2].doc_gaps_universe;
 			}
 		}
 		// merge docid and freq blocks once
 		void append_blocks(std::vector<uint8_t>& out) const {
 			thread_local std::vector<uint32_t> doc_buf, freq_buf, temp_buf;
 			for (int i = 0; i < m_blocknum; i++) {
-				m_input_block_it[2 * i].decode_doc_gaps(temp_buf);
+				m_input_block[2 * i].decode_doc_gaps(temp_buf);
 				doc_buf.insert(doc_buf.end(), temp_buf.begin(), temp_buf.end());
 
-				m_input_block_it[2 * i + 1].decode_freqs(temp_buf);
+				m_input_block[2 * i + 1].decode_freqs(temp_buf);
 				freq_buf.insert(freq_buf.end(), temp_buf.begin(),
 						temp_buf.end());
 			}
@@ -248,57 +249,16 @@ struct mixed_block {
 					uint32_t(-1), size, out);
 		}
 
-		uint32_t index; // i-th block
-		uint32_t max;
+//		uint32_t index; // i-th block
+//		uint32_t max;
 		size_t m_blocknum;
 		uint32_t size;
 		uint32_t doc_gaps_universe;
 	private:
-		typename std::vector<InputBlockData>::iterator m_input_block_it;
+		typename std::vector<InputBlockData> m_input_block;
 		block_type m_docs_type, m_freqs_type;
 		compr_param_type m_docs_param, m_freqs_param;
 	};
-//
-//	template<typename InputBlockData>
-//	struct block_merger_transformer {
-//		block_merger_transformer(
-//				typename std::vector<InputBlockData>::iterator it,
-//				size_t blocknum, block_type docs_type, block_type freqs_type,
-//				compr_param_type docs_param, compr_param_type freqs_param) :
-//				m_input_block_it(it), m_blocknum(blocknum), m_docs_type(
-//						docs_type), m_freqs_type(freqs_type), m_docs_param(
-//						docs_param), m_freqs_param(freqs_param) {
-//			// XXX the key is use iterator to calculate the universe or other info
-//			// keep in mind blocks are interleaved with docid and freq
-//			for (int i = 0; i < blocknum * 2; i++) {
-//				size += it[i * 2].size;
-//				doc_gaps_universe += it[i * 2].doc_gaps_universe;
-//			}
-//		}
-//		size_t m_blocknum;
-//		// merge docid and freq blocks once
-//		void append_blocks(std::vector<uint8_t>& out) const {
-//			thread_local std::vector<uint32_t> doc_buf, freq_buf, temp_buf;
-//			for (int i = 0; i < m_blocknum; i++) {
-//				m_input_block_it[2 * i].decode_doc_gaps(temp_buf);
-//				doc_buf.insert(doc_buf.end(), temp_buf.begin(), temp_buf.end());
-//
-//				m_input_block_it[2 * i + 1].decode_freqs(temp_buf);
-//				freq_buf.insert(freq_buf.end(), temp_buf.begin(),
-//						temp_buf.end());
-//			}
-//			encode_type(m_docs_type, m_docs_param, doc_buf.data(),
-//					doc_gaps_universe, size, out);
-//			encode_type(m_freqs_type, m_freqs_param, freq_buf.data(),
-//					uint32_t(-1), size, out);
-//		}
-//		uint32_t size;
-//		uint32_t doc_gaps_universe;
-//	private:
-//		typename std::vector<InputBlockData>::iterator m_input_block_it;
-//		block_type m_docs_type, m_freqs_type;
-//		compr_param_type m_docs_param, m_freqs_param;
-//	};
 
 	static uint8_t const* decode(uint8_t const* in, uint32_t* out,
 			uint32_t sum_of_values, size_t n) {
