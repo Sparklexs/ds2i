@@ -37,7 +37,7 @@ dual_basis initializeSpaceTimeSolutions(
 	solution_info sol_info_time(space_base, time_base,
 			block_doc_freq_lambdas.size());
 
-	int i = 0;
+	// XXX unordered_map cannot using iterator
 	for (block_lambdas_type::iterator it = block_doc_freq_lambdas.begin();
 			it != block_doc_freq_lambdas.end(); it++) {
 		// here only needs to traverse all the block_lambdas without
@@ -50,7 +50,7 @@ dual_basis initializeSpaceTimeSolutions(
 		sol_info_space.get_time() += it->second.front().st.time;
 		sol_info_time.get_time() += it->second.back().st.time;
 		// indexes are naturally 0s and size()-1
-		sol_info_time.get_index()[i++] = it->second.size() - 1;
+		sol_info_time.get_index()[it->first] = it->second.size() - 1;
 	}
 //#ifndef NDEBUG
 	logger() << "space-optimal solution: S = " << sol_info_space.get_space()
@@ -135,10 +135,10 @@ solution_info swapPath(dual_basis & basis,
 	std::array<double, 2> head_times { { time_base, time_base } }, tail_times {
 			{ s_1.get_time(), s_2.get_time() } };
 
+	size_t count = 0;
 	while (sol_its[0] != s_1.get_index().end()
 			&& sol_its[1] != s_2.get_index().end()) {
 
-		static unsigned int count = 0;
 		// 1. skip over blocks using same encoding parameters
 
 		// after this while-loop, head contains blocks[0, the first not equal)
@@ -444,11 +444,13 @@ void computeLambdas(InputCollectionType const& input_coll,
 	queue.complete();
 	plog.log();
 
+	logger() << "Now loading computed lambdas into memory..." << std::endl;
 	for (lambda_vector_type::iterator it = lambda_points.begin();
 			it != lambda_points.end(); it++) {
 		block_doc_freq_lambdas[it->block_id].push_back(
 				lambda_point { it->block_id, it->lambda, it->st });
 	}
+	logger() << "Fully loaded." << std::endl;
 
 //	logger() << lambda_points.size() << " lambda points" << std::endl;
 	double elapsed_secs = (get_time_usecs() - tick) / 1000000;
@@ -512,11 +514,14 @@ void bicriteria_hybrid_index(ds2i::global_parameters const& params,
 		stxxl::syscall_file lpfile(lambdas_filename,
 				stxxl::file::DIRECT | stxxl::file::RDONLY);
 		lambda_vector_type lambda_points(&lpfile);
+
+		logger() << "Now loading stored lambdas into memory..." << std::endl;
 		for (auto const& lpid : lambda_vector_type::bufreader_type(
 				lambda_points)) {
 			block_doc_freq_lambdas[lpid.block_id].push_back(
 					lambda_point { lpid.block_id, lpid.lambda, lpid.st });
 		}
+		logger() << "Fully loaded." << std::endl;
 	} else {
 		computeLambdas(input_coll, predictors_filename, block_stats_filename,
 				lambdas_filename, block_doc_freq_lambdas);
@@ -527,7 +532,14 @@ void bicriteria_hybrid_index(ds2i::global_parameters const& params,
 			<< " blocks in current list." << std::endl;
 #endif
 
-	// SECOND, find the optimal encodings of each block
+	//SECOND, find the optimal encodings of each block
+//	char type = 'T';
+//
+//	for (float var = 0.4; var < 1.1; var += 0.1) {
+//		std::ostringstream ostr;
+//		ostr << var << type;
+//		budget = add_bound(ostr.str().c_str());
+//		logger() << "********budget: " << ostr.str() << "********" << std::endl;
 
 	double tick = get_time_usecs();
 	double user_tick = get_user_time_usecs();
@@ -539,7 +551,6 @@ void bicriteria_hybrid_index(ds2i::global_parameters const& params,
 	 ****************************************************/
 	auto basis = initializeSpaceTimeSolutions(block_doc_freq_lambdas, budget,
 			space_base, time_base);
-
 #ifndef NDEBUG
 	print_basis(basis);
 #endif
@@ -615,9 +626,12 @@ void bicriteria_hybrid_index(ds2i::global_parameters const& params,
 		stats_line()("worker_threads", configuration::get().worker_threads)(
 				"construction_time", elapsed_secs)("construction_user_time",
 				user_elapsed_secs);
+
+		logger() << "Dumping indexes into disk..." << std::endl;
 		dump_stats(coll, "block_mixed", plog.postings);
 
 		succinct::mapper::freeze(coll, output_filename);
+		logger() << "Dumping finished." << std::endl;
 
 	} else {
 		// collect statistics of blocks using different encoders

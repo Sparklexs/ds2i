@@ -60,11 +60,13 @@ private:
 	// nanoseconds / bytes
 	double fix_bound;
 
-	std::string space_name(unsigned int value) {
+	std::string space_name(double value) {
 //		if (value < kilo_num) {
-			std::ostringstream ost;
-			ost << value << "B";
-			return ost.str();
+		std::ostringstream ost;
+		ost.setf(std::ios::fixed);
+		ost.precision(0);
+		ost << value << "B";
+		return ost.str();
 //		} else if (value < mega_num) {
 //			return prec_print(value, 8 * kilo_num, 2).append("KB");
 //		} else {
@@ -72,11 +74,11 @@ private:
 //		}
 	}
 
-	std::string time_name(unsigned int value) {
+	std::string time_name(double value) {
 //		if (value < std::giga::num) {
-			std::ostringstream ost;
-			ost << (value / std::mega::num) << "msec";
-			return ost.str();
+		std::ostringstream ost;
+		ost << (value / std::mega::num) << "msec";
+		return ost.str();
 //		} else {
 //			return prec_print(value, std::giga::num, 2).append("sec");
 //		}
