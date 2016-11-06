@@ -140,7 +140,6 @@ solution_info swapPath(dual_basis & basis,
 	while (sol_its[0] != s_1.get_index().end()
 			&& sol_its[1] != s_2.get_index().end()) {
 
-		static uint32_t count = 0;
 		// 1. skip over blocks using same encoding parameters
 
 		// after this while-loop, head contains blocks[0, the first not equal)
@@ -226,8 +225,9 @@ solution_info swapPath(dual_basis & basis,
 // @param spans is used to denote each size of mixed block
 template<typename InputCollectionType>
 void mergeBlocks(InputCollectionType &input_coll, block_lambdas_type &lambdas,
-		std::vector<uint32_t>::iterator single_block_it, std::vector<uint32_t> &spans,
-		std::vector<uint32_t> &endpoints, const char* block_stats_filename) {
+		std::vector<uint32_t>::iterator single_block_it,
+		std::vector<uint32_t> &spans, std::vector<uint32_t> &endpoints,
+		const char* block_stats_filename) {
 	std::ifstream block_stats(block_stats_filename);
 	uint32_t current_list_id;
 	std::vector<block_id_type> block_counts;
@@ -256,6 +256,7 @@ void mergeBlocks(InputCollectionType &input_coll, block_lambdas_type &lambdas,
 		last_freq_param = lambdas[base + 1][single_block_it[base + 1]].st.param;
 
 		auto e = input_coll[l];
+		bool is_end_block_partial = e.size() % ds2i::mixed_block::BLOCKSIZEBASE;
 
 		if (l == current_list_id) {
 			block_counts_consumed = true;
@@ -264,6 +265,12 @@ void mergeBlocks(InputCollectionType &input_coll, block_lambdas_type &lambdas,
 			// note here we don't need to align the block access_count to the
 			// maximal one
 			for (uint32_t i = 2; i < 2 * e.num_blocks(); i += 2) {
+				if (i == 2 * (e.num_blocks() - 1))
+					if (is_end_block_partial) {
+						spans.push_back(num_merged);
+						num_merged = 1;
+						break;
+					}
 				// doc
 				block_id_type doc_access_count = block_counts[i];
 				ds2i::mixed_block::block_type doc_type =
@@ -307,6 +314,12 @@ void mergeBlocks(InputCollectionType &input_coll, block_lambdas_type &lambdas,
 		} else {
 			// all the access count equals to 0
 			for (size_t i = 2; i < 2 * e.num_blocks(); i += 2) {
+				if (i == 2 * (e.num_blocks() - 1))
+					if (is_end_block_partial) {
+						spans.push_back(num_merged);
+						num_merged = 1;
+						break;
+					}
 				// doc
 				ds2i::mixed_block::block_type doc_type =
 						lambdas[base + i][single_block_it[base + i]].st.type;
@@ -318,7 +331,7 @@ void mergeBlocks(InputCollectionType &input_coll, block_lambdas_type &lambdas,
 				ds2i::mixed_block::compr_param_type freq_param = lambdas[base
 						+ i + 1][single_block_it[base + i + 1]].st.param;
 
-				if (num_merged <= 8) {
+				if (num_merged < 8) {
 					if (doc_type == last_doc_type
 							&& std::abs(doc_param - last_doc_param) <= 2
 							&& freq_type == last_freq_type
@@ -650,9 +663,9 @@ void bicriteria_hybrid_index(ds2i::global_parameters const& params,
 			<< " partial blocks, " << space_base
 			<< " bytes (not including compressed blocks)" << std::endl;
 
-/*****************************************************
- * call the function that build the mixed-index
- ****************************************************/
+	/*****************************************************
+	 * call the function that build the mixed-index
+	 ****************************************************/
 
 // global variables
 	block_lambdas_type block_doc_freq_lambdas;
@@ -790,27 +803,33 @@ void bicriteria_hybrid_index(ds2i::global_parameters const& params,
 		logger() << "Dumping finished." << std::endl;
 	} else {
 		// collect statistics of blocks using different encoders
-		std::map<type_param_pair, size_t> type_counts;
 
-		for (block_id_type i = 0; i < sol_final.get_index().size();
-				i++, index_it++) {
-			type_counts[type_param_pair(
+		std::map<std::tuple<uint32_t, uint32_t, uint32_t>, uint32_t> en_type_counts;
+		std::vector<uint32_t>::iterator spans_it = spans.begin();
+
+		for (block_id_type i = 0; i < sol_final.get_index().size();) {
+			en_type_counts[std::make_tuple(
 					(uint8_t) block_doc_freq_lambdas[i][*index_it].st.type,
-					block_doc_freq_lambdas[i][*index_it].st.param)] += 1;
+					block_doc_freq_lambdas[i][*index_it].st.param, *spans_it)] +=
+					1;
+			i += *spans_it;
+			index_it += *spans_it++;
 		}
-		std::vector<std::pair<type_param_pair, size_t>> type_counts_vec;
-		for (uint8_t t = 0; t < mixed_block::block_types; ++t) {
+		std::vector<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>> en_type_counts_vec;
+		for (uint8_t t = 0; t < mixed_block::block_types; ++t)
 			for (uint8_t param = 0;
 					param
 							< mixed_block::compr_params(
-									(mixed_block::block_type) t); ++param) {
-				auto tp = type_param_pair(t, param);
-				type_counts_vec.push_back(std::make_pair(tp, type_counts[tp]));
-			}
-		}
+									(mixed_block::block_type) t); ++param)
+				for (int i = 1; i <= 8; i++) {
+					auto tp = std::make_tuple(t, param, i,
+							en_type_counts[std::make_tuple(t, param, i)]);
+
+					en_type_counts_vec.push_back(tp);
+				}
 
 		stats_line()("blocks", num_blocks)("partial_blocks", partial_blocks)(
-				"type_counts", type_counts_vec);
+				"type_counts", en_type_counts_vec);
 	}
 }
 
