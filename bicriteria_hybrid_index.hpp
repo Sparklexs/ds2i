@@ -8,6 +8,32 @@
 #ifndef BICRITERIA_HYBRID_INDEX_HPP_
 #define BICRITERIA_HYBRID_INDEX_HPP_
 
+#include <fstream>
+#include <sstream>
+#include <iostream>
+#include <algorithm>
+#include <thread>
+#include <numeric>
+#include <memory>
+
+#include <boost/lexical_cast.hpp>
+#include <boost/filesystem/operations.hpp>
+#include <boost/serialization/vector.hpp>
+#include <boost/archive/binary_iarchive.hpp>
+#include <boost/archive/binary_oarchive.hpp>
+
+#include <succinct/mapper.hpp>
+
+#include <stxxl/vector>
+#include <stxxl/io>
+#include <stxxl/sort>
+
+#include "configuration.hpp"
+#include "index_types.hpp"
+#include "util.hpp"
+#include "verify_collection.hpp"
+#include "index_build_utils.hpp"
+
 using ds2i::logger;
 
 typedef uint32_t block_id_type; // XXX for memory reasons, but would need size_t for very large indexes
@@ -261,6 +287,22 @@ public:
 		space = si.get_space();
 		time = si.get_time();
 		lp_indexs = si.get_index();
+	}
+
+	void save(std::ofstream &out) {
+		boost::archive::binary_oarchive oa(out);
+		oa & space;
+		oa & time;
+		oa & BOOST_SERIALIZATION_NVP(lp_indexs);
+		out.flush();
+		out.close();
+	}
+
+	void load(std::ifstream & in) {
+		boost::archive::binary_iarchive ia(in);
+		ia & space;
+		ia & time;
+		ia & BOOST_SERIALIZATION_NVP(lp_indexs);
 	}
 
 	std::vector<uint32_t> &get_index() {
