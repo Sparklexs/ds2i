@@ -5,28 +5,6 @@
  *      Author: xsong
  */
 
-#include <fstream>
-#include <sstream>
-#include <iostream>
-#include <algorithm>
-#include <thread>
-#include <numeric>
-#include <memory>
-
-#include <boost/lexical_cast.hpp>
-#include <boost/filesystem/operations.hpp>
-
-#include <succinct/mapper.hpp>
-
-#include <stxxl/vector>
-#include <stxxl/io>
-#include <stxxl/sort>
-
-#include "configuration.hpp"
-#include "index_types.hpp"
-#include "util.hpp"
-#include "verify_collection.hpp"
-#include "index_build_utils.hpp"
 #include "bicriteria_hybrid_index.hpp"
 
 dual_basis initializeSpaceTimeSolutions(
@@ -246,6 +224,10 @@ struct list_transformer: ds2i::semiasync_queue::job {
 			auto docs_param = lambdas[base++][*it++].st.param;
 			auto freqs_type = lambdas[base][*it].st.type;
 			auto freqs_param = lambdas[base++][*it++].st.param;
+
+//			if (m_e.size() == 917826)
+//				std::cout << (int) docs_type << (int) docs_param
+//						<< (int) freqs_type << (int) freqs_param;
 			blocks_to_transform.emplace_back(input_block, docs_type, freqs_type,
 					docs_param, freqs_param);
 		}
@@ -466,7 +448,8 @@ template<typename InputCollectionType>
 void bicriteria_hybrid_index(ds2i::global_parameters const& params,
 		const char* predictors_filename, const char* block_stats_filename,
 		const char* input_filename, const char* output_filename,
-		const char* lambdas_filename, std::shared_ptr<bound> budget) {
+		const char* lambdas_filename, const char* solution_filename,
+		std::shared_ptr<bound> budget) {
 	using namespace ds2i;
 
 	InputCollectionType input_coll;
@@ -503,6 +486,7 @@ void bicriteria_hybrid_index(ds2i::global_parameters const& params,
 	// global variables
 	block_lambdas_type block_doc_freq_lambdas;
 	solution_info sol_final;
+	double tick, user_tick, elapsed_secs, user_elapsed_secs;
 
 	// FIRST, compute the lambdas for all the block
 
@@ -540,46 +524,59 @@ void bicriteria_hybrid_index(ds2i::global_parameters const& params,
 //		ostr << var << type;
 //		budget = add_bound(ostr.str().c_str());
 //		logger() << "********budget: " << ostr.str() << "********" << std::endl;
+	if (access(solution_filename, 0) != -1) {
+		logger() << "Found calculated indexes, now loading..." << std::endl;
+		std::ifstream in(solution_filename);
+		sol_final.load(in);
+	} else {
+		logger() << "Found no calculated indexes, have to calculate now."
+				<< std::endl;
 
-	double tick = get_time_usecs();
-	double user_tick = get_user_time_usecs();
+		tick = get_time_usecs();
+		user_tick = get_user_time_usecs();
 
-	double time_base = 0;
-	logger() << "Computing space-time tradeoffs" << std::endl;
-	/*****************************************************
-	 * step 1: initialize two extreme paths
-	 ****************************************************/
-	auto basis = initializeSpaceTimeSolutions(block_doc_freq_lambdas, budget,
-			space_base, time_base);
+		double time_base = 0;
+		logger() << "Computing space-time tradeoffs" << std::endl;
+		/*****************************************************
+		 * step 1: initialize two extreme paths
+		 ****************************************************/
+		auto basis = initializeSpaceTimeSolutions(block_doc_freq_lambdas,
+				budget, space_base, time_base);
 #ifndef NDEBUG
-	print_basis(basis);
+		print_basis(basis);
 #endif
 
-	if (basis.get_mu() < 0) {
-		// early return found! we will skip following steps and compress immediately.
-		std::tie(sol_final, sol_final) = basis.get_basis();
-	} else {
-		// next optimize the basis to squeeze the range between
-		// UB and LB
-		/*****************************************************
-		 * step 2: recursively intersect pi_l and pi_r to approximate the boundary
-		 ****************************************************/
-		optimize(basis, block_doc_freq_lambdas, budget, space_base, time_base);
+		if (basis.get_mu() < 0) {
+			// early return found! we will skip following steps and compress immediately.
+			std::tie(sol_final, sol_final) = basis.get_basis();
+		} else {
+			// next optimize the basis to squeeze the range between
+			// UB and LB
+			/*****************************************************
+			 * step 2: recursively intersect pi_l and pi_r to approximate the boundary
+			 ****************************************************/
+			optimize(basis, block_doc_freq_lambdas, budget, space_base,
+					time_base);
 
-		//next swap UB and LB if needed
-		/*****************************************************
-		 * step 3: combine UB and LB into one path
-		 ****************************************************/
-		sol_final = swapPath(basis, block_doc_freq_lambdas, space_base,
-				time_base);
+			//next swap UB and LB if needed
+			/*****************************************************
+			 * step 3: combine UB and LB into one path
+			 ****************************************************/
+			sol_final = swapPath(basis, block_doc_freq_lambdas, space_base,
+					time_base);
 
+		}
+
+		elapsed_secs = (get_time_usecs() - tick) / 1000000;
+		user_elapsed_secs = (get_user_time_usecs() - user_tick) / 1000000;
+
+		std::ofstream out(solution_filename);
+		sol_final.save(out);
+
+		stats_line()("worker_threads", configuration::get().worker_threads)(
+				"greedy_time", elapsed_secs)("greedy_user_time",
+				user_elapsed_secs);
 	}
-
-	double elapsed_secs = (get_time_usecs() - tick) / 1000000;
-	double user_elapsed_secs = (get_user_time_usecs() - user_tick) / 1000000;
-
-	stats_line()("worker_threads", configuration::get().worker_threads)(
-			"greedy_time", elapsed_secs)("greedy_user_time", user_elapsed_secs);
 	logger() << "Found trade-off. Space: " << sol_final.get_space()
 			<< "B, Time: " << sol_final.get_time() << "ns" << std::endl;
 	stats_line()("found_space", sol_final.get_space())("found_time",
@@ -664,7 +661,8 @@ int main(int argc, const char** argv) {
 
 	if (argc < 5) {
 		std::cerr << "Usage: " << argv[0]
-				<< " <index type> <predictors> <block_stats> <input_index> <lambdas_filename> <budget> [output_index] [--check <collection_basename>]"
+				<< " <index type> <predictors> <block_stats> <input_index> <lambdas_filename> "
+						"<solution_filename> <budget> [output_index] [--check <collection_basename>]"
 				<< std::endl;
 		return 1;
 	}
@@ -674,20 +672,21 @@ int main(int argc, const char** argv) {
 	const char* block_stats_filename = argv[3];
 	const char* input_filename = argv[4];
 	const char* lambdas_filename = argv[5];
+	const char* solution_filename = argv[6];
 //	size_t budget = boost::lexical_cast<size_t>(argv[6]);
 
-	std::shared_ptr<bound> budget = add_bound(argv[6]);
+	std::shared_ptr<bound> budget = add_bound(argv[7]);
 
 	const char* output_filename = nullptr;
-	if (argc > 7) {
-		output_filename = argv[7];
+	if (argc > 8) {
+		output_filename = argv[8];
 	}
 
 	bool check = false;
 	const char* collection_basename = nullptr;
-	if (argc > 9 && std::string(argv[8]) == "--check") {
+	if (argc > 10 && std::string(argv[9]) == "--check") {
 		check = true;
-		collection_basename = argv[9];
+		collection_basename = argv[10];
 	}
 
 	ds2i::global_parameters params;
@@ -697,7 +696,7 @@ int main(int argc, const char** argv) {
         } else if (type == BOOST_PP_STRINGIZE(T)) {                     \
             bicriteria_hybrid_index<BOOST_PP_CAT(T, _index)>               \
                 (params, predictors_filename, block_stats_filename,     \
-                 input_filename, output_filename,lambdas_filename,  budget); \
+                 input_filename, output_filename,lambdas_filename, solution_filename, budget); \
             if (check) {                                                \
                 binary_freq_collection input(collection_basename);      \
                 verify_collection<binary_freq_collection, block_mixed_index> \
