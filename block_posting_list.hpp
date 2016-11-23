@@ -458,8 +458,8 @@ struct block_posting_list<ds2i::mixed_block, Profile> {
 		document_enumerator(uint8_t const* data, uint64_t universe,
 				size_t term_id = 0) :
 				m_universe(universe), m_accum_block_count(0) {
-			TightVariableByte::decode(data, &m_n, 1);
-			m_block_maxs = m_base = TightVariableByte::decode(data, &m_blocks,
+			const uint8_t *inbyte = TightVariableByte::decode(data, &m_n, 1);
+			m_block_maxs = m_base = TightVariableByte::decode(inbyte, &m_blocks,
 					1);
 			m_block_endpoints = m_block_maxs + 4 * m_blocks;
 			m_blocks_data = m_block_endpoints + 4 * (m_blocks - 1);
@@ -563,12 +563,16 @@ struct block_posting_list<ds2i::mixed_block, Profile> {
 			uint8_t const* ptr = m_blocks_data;
 			static const uint64_t block_size = ds2i::mixed_block::block_size;
 			std::vector<uint32_t> buf;
+			size_t total_sizes = 0;
 			for (size_t b = 0; b < m_blocks; ++b) {
 				uint32_t cur_base = (b ? block_max(b - 1) : uint32_t(-1)) + 1;
 				uint32_t cur_block_size =
 						b == m_blocks - 1 ?
-								size() % block_size :
+								(size() - total_sizes) :
 								((*ptr & 7) + 1) * block_size;
+				total_sizes += cur_block_size;
+				if (1 == m_blocks)
+					cur_block_size = size();
 
 				buf.resize(cur_block_size);
 
@@ -630,14 +634,16 @@ struct block_posting_list<ds2i::mixed_block, Profile> {
 			static const uint64_t block_size = ds2i::mixed_block::block_size;
 			std::vector<uint32_t> buf;
 			//			uint32_t* docFreq_endpoints = (uint32_t*) m_block_endpoints;
+			size_t total_sizes = 0;
 			for (size_t b = 0; b < m_blocks; ++b) {
 				blocks.emplace_back();
 
 				uint32_t cur_base = (b ? block_max(b - 1) : uint32_t(-1)) + 1;
 				uint32_t cur_block_size =
 						b == m_blocks - 1 ?
-								size() % block_size :
+								(size() - total_sizes) :
 								((*ptr & 7) + 1) * block_size;
+				total_sizes += cur_block_size;
 				uint32_t gaps_universe = block_max(b) - cur_base
 						- (cur_block_size - 1);
 
@@ -677,11 +683,10 @@ struct block_posting_list<ds2i::mixed_block, Profile> {
 			uint8_t const* block_data = m_blocks_data + endpoint;
 
 			if (block == m_blocks - 1) {
-				m_cur_block_size = size() % block_size;
+				m_cur_block_size = size() - m_accum_block_count * block_size;
 				m_accum_block_count++;
 			} else {
-				m_cur_block_size = ((*block_data & 7) + 1)
-						* ds2i::mixed_block::block_size;
+				m_cur_block_size = ((*block_data & 7) + 1) * block_size;
 				m_accum_block_count += (*block_data & 7) + 1;
 			}
 

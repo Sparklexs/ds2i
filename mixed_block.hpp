@@ -220,26 +220,28 @@ struct mixed_block {
 		block_transformer(typename std::vector<InputBlockData> blocks,
 				block_type docs_type, block_type freqs_type,
 				compr_param_type docs_param, compr_param_type freqs_param) :
-				m_input_block(blocks), /*index(blocks->index), max(0),*/m_docs_type(
-						docs_type), m_freqs_type(freqs_type), m_docs_param(
-						docs_param), m_freqs_param(freqs_param) {
+				index(blocks[0].index), max(0), m_blocknum(0), size(0), doc_gaps_universe(
+						0), m_input_block(blocks), m_docs_type(docs_type), m_freqs_type(
+						freqs_type), m_docs_param(docs_param), m_freqs_param(
+						freqs_param) {
 			// XXX the key is use iterator to calculate the universe or other info
-			// keep in mind blocks are interleaved with docid and freq
+			// keep in mind blocks are tuple <docid,freq>
+			// details see block_posting_list::document_enumerator::block_data
 			m_blocknum = blocks.size();
-			for (int i = 0; i < m_blocknum * 2; i++) {
-				size += blocks[i * 2].size;
-//				max = std::max(max, blocks[i * 2].max);
-				doc_gaps_universe += blocks[i * 2].doc_gaps_universe;
+			for (int i = 0; i < m_blocknum; i++) {
+				size += blocks[i].size;
+				max = std::max(max, blocks[i].max);
+				doc_gaps_universe += blocks[i].doc_gaps_universe;
 			}
 		}
 		// merge docid and freq blocks once
 		void append_blocks(std::vector<uint8_t>& out) const {
-			thread_local std::vector<uint32_t> doc_buf, freq_buf, temp_buf;
+			/*thread_local*/ std::vector<uint32_t> doc_buf, freq_buf, temp_buf;
 			for (int i = 0; i < m_blocknum; i++) {
-				m_input_block[2 * i].decode_doc_gaps(temp_buf);
+				m_input_block[i].decode_doc_gaps(temp_buf);
 				doc_buf.insert(doc_buf.end(), temp_buf.begin(), temp_buf.end());
 
-				m_input_block[2 * i + 1].decode_freqs(temp_buf);
+				m_input_block[i].decode_freqs(temp_buf);
 				freq_buf.insert(freq_buf.end(), temp_buf.begin(),
 						temp_buf.end());
 			}
@@ -249,8 +251,8 @@ struct mixed_block {
 					uint32_t(-1), size, out);
 		}
 
-//		uint32_t index; // i-th block
-//		uint32_t max;
+		uint32_t index; // i-th block
+		uint32_t max;
 		size_t m_blocknum;
 		uint32_t size;
 		uint32_t doc_gaps_universe;

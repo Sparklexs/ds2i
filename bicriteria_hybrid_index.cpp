@@ -200,7 +200,7 @@ solution_info swapPath(dual_basis & basis,
 }
 
 // @param endpoints is used to denote number of blocks on each posting list,
-// i.e. endpoints[0]=3 means there are 3 blocks for posting list 0.
+// i.e. endpoints[0]=3 means there are 3 merged blocks for posting list 0.
 // @param spans is used to denote each size of mixed block
 template<typename InputCollectionType>
 void mergeBlocks(InputCollectionType &input_coll, block_lambdas_type &lambdas,
@@ -216,34 +216,51 @@ void mergeBlocks(InputCollectionType &input_coll, block_lambdas_type &lambdas,
 		return ((double)std::abs(ac-ac_last))/std::max(ac,ac_last);
 	};
 
-	size_t base = 0;
+	size_t base = 0, last_endpoint = 0;
 	for (size_t l = 0; l < input_coll.size(); ++l) {
-
 		if (block_counts_consumed) {
 			block_counts_consumed = false;
 			ds2i::time_prediction::read_block_stats(block_stats,
 					current_list_id, block_counts);
 		}
 
-		ds2i::mixed_block::block_type last_doc_type, last_freq_type;
-		ds2i::mixed_block::compr_param_type last_doc_param, last_freq_param;
+		ds2i::mixed_block::block_type last_doc_type, last_freq_type, doc_type,
+				freq_type;
+		ds2i::mixed_block::compr_param_type last_doc_param, doc_param,
+				last_freq_param, freq_param;
 
-		uint32_t num_merged = 1;
+		uint32_t num_merged = 1, start_pos = 0;
 		last_doc_type = lambdas[base][single_block_it[base]].st.type;
 		last_doc_param = lambdas[base][single_block_it[base]].st.param;
 		last_freq_type = lambdas[base + 1][single_block_it[base + 1]].st.type;
 		last_freq_param = lambdas[base + 1][single_block_it[base + 1]].st.param;
+
+		if (DS2I_UNLIKELY(
+				freq_type == ds2i::mixed_block::block_type::pfor
+						|| freq_param == 0)) {
+			spans.push_back(1);
+			start_pos = 2;
+			last_doc_type = lambdas[base + start_pos][single_block_it[base
+					+ start_pos]].st.type;
+			last_doc_param = lambdas[base + start_pos][single_block_it[base
+					+ start_pos]].st.param;
+			last_freq_type = lambdas[base + start_pos + 1][single_block_it[base
+					+ start_pos + 1]].st.type;
+			last_freq_param = lambdas[base + start_pos + 1][single_block_it[base
+					+ start_pos + 1]].st.param;
+		}
 
 		auto e = input_coll[l];
 		bool is_end_block_partial = e.size() % ds2i::mixed_block::BLOCKSIZEBASE;
 
 		if (l == current_list_id) {
 			block_counts_consumed = true;
-			block_id_type last_doc_access_count, last_freq_access_count;
-
+			block_id_type last_doc_access_count = block_counts[0],
+					last_freq_access_count = block_counts[1], doc_access_count,
+					freq_access_count;
 			// note here we don't need to align the block access_count to the
 			// maximal one
-			for (uint32_t i = 2; i < 2 * e.num_blocks(); i += 2) {
+			for (uint32_t i = start_pos; i < 2 * e.num_blocks(); i += 2) {
 				if (i == 2 * (e.num_blocks() - 1))
 					if (is_end_block_partial) {
 						spans.push_back(num_merged);
@@ -251,35 +268,61 @@ void mergeBlocks(InputCollectionType &input_coll, block_lambdas_type &lambdas,
 						break;
 					}
 				// doc
-				block_id_type doc_access_count = block_counts[i];
-				ds2i::mixed_block::block_type doc_type =
-						lambdas[base + i][single_block_it[base + i]].st.type;
-				ds2i::mixed_block::compr_param_type doc_param =
+				doc_access_count = block_counts[i];
+				doc_type = lambdas[base + i][single_block_it[base + i]].st.type;
+				doc_param =
 						lambdas[base + i][single_block_it[base + i]].st.param;
 				//freq
-				block_id_type freq_access_count = block_counts[i + 1];
-				ds2i::mixed_block::block_type freq_type =
+				freq_access_count = block_counts[i + 1];
+				freq_type =
 						lambdas[base + i + 1][single_block_it[base + i + 1]].st.type;
-				ds2i::mixed_block::compr_param_type freq_param = lambdas[base
-						+ i + 1][single_block_it[base + i + 1]].st.param;
+				freq_param =
+						lambdas[base + i + 1][single_block_it[base + i + 1]].st.param;
 
-				if (num_merged < 8) {
-					if (doc_type == last_doc_type
-							&& std::abs(doc_param - last_doc_param) <= 2
-							&& freq_type == last_freq_type
-							&& std::abs(freq_param - last_freq_param) <= 2
-							&& ratio(doc_access_count, last_doc_access_count)
-									<= 0.1
-							&& ratio(freq_access_count, last_freq_access_count)
-									<= 0.1) {
-						num_merged++;
+				if (DS2I_LIKELY(
+						freq_type != ds2i::mixed_block::block_type::pfor
+								|| freq_param != 0)) {
+					if (num_merged < 8) {
+						if (doc_type == last_doc_type
+								&& std::abs(doc_param - last_doc_param) <= 2
+								&& freq_type == last_freq_type
+								&& std::abs(freq_param - last_freq_param) <= 2
+								&& ratio(doc_access_count,
+										last_doc_access_count) <= 0.1
+								&& ratio(freq_access_count,
+										last_freq_access_count) <= 0.1) {
+							num_merged++;
+						} else {
+							spans.push_back(num_merged);
+							num_merged = 1;
+						}
 					} else {
 						spans.push_back(num_merged);
 						num_merged = 1;
 					}
 				} else {
+					// special cases where freq-block occupies 0 bits
+					// must be isolated
 					spans.push_back(num_merged);
+					spans.push_back(1);
+
+					i += 2;
+					// doc
+					last_doc_type =
+							lambdas[base + i][single_block_it[base + i]].st.type;
+					last_doc_param =
+							lambdas[base + i][single_block_it[base + i]].st.param;
+					last_doc_access_count = block_counts[i];
+
+					// freq
+					last_freq_type = lambdas[base + i + 1][single_block_it[base
+							+ i + 1]].st.type;
+					last_freq_param = lambdas[base + i + 1][single_block_it[base
+							+ i + 1]].st.param;
+					last_freq_access_count = block_counts[i + 1];
+
 					num_merged = 1;
+					continue;
 				}
 
 				last_doc_access_count = doc_access_count;
@@ -289,7 +332,6 @@ void mergeBlocks(InputCollectionType &input_coll, block_lambdas_type &lambdas,
 				last_freq_param = freq_param;
 				last_freq_type = freq_type;
 			}
-
 		} else {
 			// all the access count equals to 0
 			for (size_t i = 2; i < 2 * e.num_blocks(); i += 2) {
@@ -300,30 +342,57 @@ void mergeBlocks(InputCollectionType &input_coll, block_lambdas_type &lambdas,
 						break;
 					}
 				// doc
-				ds2i::mixed_block::block_type doc_type =
-						lambdas[base + i][single_block_it[base + i]].st.type;
-				ds2i::mixed_block::compr_param_type doc_param =
+				doc_type = lambdas[base + i][single_block_it[base + i]].st.type;
+				doc_param =
 						lambdas[base + i][single_block_it[base + i]].st.param;
 				//freq
-				ds2i::mixed_block::block_type freq_type =
+				freq_type =
 						lambdas[base + i + 1][single_block_it[base + i + 1]].st.type;
-				ds2i::mixed_block::compr_param_type freq_param = lambdas[base
-						+ i + 1][single_block_it[base + i + 1]].st.param;
+				freq_param =
+						lambdas[base + i + 1][single_block_it[base + i + 1]].st.param;
 
-				if (num_merged < 8) {
-					if (doc_type == last_doc_type
-							&& std::abs(doc_param - last_doc_param) <= 2
-							&& freq_type == last_freq_type
-							&& std::abs(freq_param - last_freq_param) <= 2) {
-						num_merged++;
+				if (DS2I_LIKELY(
+						freq_type != ds2i::mixed_block::block_type::pfor
+								|| freq_param != 0)) {
+					if (num_merged < 8) {
+						if (doc_type == last_doc_type
+								&& std::abs(doc_param - last_doc_param) <= 2
+								&& freq_type == last_freq_type
+								&& std::abs(freq_param - last_freq_param)
+										<= 2) {
+							num_merged++;
+						} else {
+							spans.push_back(num_merged);
+							num_merged = 1;
+						}
 					} else {
 						spans.push_back(num_merged);
 						num_merged = 1;
 					}
 				} else {
+					// special cases where freq-block occupies 0 bits
+					// must be isolated
 					spans.push_back(num_merged);
+					spans.push_back(1);
 					num_merged = 1;
+
+					i += 2;
+					// doc
+					last_doc_type =
+							lambdas[base + i][single_block_it[base + i]].st.type;
+					last_doc_param =
+							lambdas[base + i][single_block_it[base + i]].st.param;
+
+					// freq
+					last_freq_type = lambdas[base + i + 1][single_block_it[base
+							+ i + 1]].st.type;
+					last_freq_param = lambdas[base + i + 1][single_block_it[base
+							+ i + 1]].st.param;
+
+					num_merged = 1;
+					continue;
 				}
+
 				last_doc_param = doc_param;
 				last_doc_type = doc_type;
 				last_freq_param = freq_param;
@@ -331,8 +400,9 @@ void mergeBlocks(InputCollectionType &input_coll, block_lambdas_type &lambdas,
 			}
 		}
 		spans.push_back(num_merged);
-		endpoints.push_back(spans.size());
-		base += e.num_blocks();
+		endpoints.push_back(spans.size() - last_endpoint);
+		last_endpoint = spans.size();
+		base += 2 * e.num_blocks();
 	}
 //	std::cout << std::accumulate(spans.begin(), spans.end(), 0) << std::endl;
 //	std::cout << lambdas.size() / 2 << std::endl;
@@ -396,8 +466,31 @@ struct list_transformer: ds2i::semiasync_queue::job {
 //			blocks_to_transform.emplace_back(input_block, docs_type, freqs_type,
 //					docs_param, freqs_param);
 //		}
-//		block_posting_list<mixed_block>::write_blocks(m_buf, m_e.size(),
-//				blocks_to_transform);
+//		if (m_e.size() == 30355) {
+//			for (int i = 0; i < m_e.num_blocks(); i++) {
+//				auto docs_type = lambdas[base + i * 2][index_it[i * 2]].st.type;
+//				auto docs_param =
+//						lambdas[base + i * 2][index_it[i * 2]].st.param;
+//				auto freqs_type =
+//						lambdas[base + i * 2 + 1][index_it[i * 2 + 1]].st.type;
+//				auto freqs_param =
+//						lambdas[base + i * 2 + 1][index_it[i * 2 + 1]].st.param;
+//				std::cout << (int) docs_type << (int) docs_param
+//						<< (int) freqs_type << (int) freqs_param;
+//			}
+//			std::cout << std::endl;
+//			for (auto elem : blocks_to_transform) {
+//				std::cout << (int) elem.m_docs_type << (int) elem.m_docs_param
+//						<< (int) elem.m_freqs_type << (int) elem.m_freqs_param;
+//
+//				for (int t = 0; t < elem.m_blocknum - 1; t++) {
+//					std::cout << "    ";
+//				}
+//			}
+//			std::cout << std::endl;
+//		}
+		block_posting_list<mixed_block>::write_blocks(m_buf, m_e.size(),
+				blocks_to_transform);
 	}
 
 	virtual void commit() {
@@ -756,6 +849,7 @@ void bicriteria_hybrid_index(ds2i::global_parameters const& params,
 
 		block_id_type block_base = 0;
 		std::vector<uint32_t>::iterator spans_it, endpoints_it;
+		index_it = sol_final.get_index().begin();
 		spans_it = spans.begin();
 		endpoints_it = endpoints.begin();
 
@@ -789,9 +883,10 @@ void bicriteria_hybrid_index(ds2i::global_parameters const& params,
 				"construction_time", elapsed_secs)("construction_user_time",
 				user_elapsed_secs);
 
-		logger() << "Dumping indexes into disk..." << std::endl;
-		dump_stats(coll, "block_mixed", plog.postings);
+		// XXX: commented for fast compression
+//		dump_stats(coll, "block_mixed", plog.postings);
 
+		logger() << "Dumping indexes into disk..." << std::endl;
 		succinct::mapper::freeze(coll, output_filename);
 		logger() << "Dumping finished." << std::endl;
 	} else {
